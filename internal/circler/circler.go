@@ -52,6 +52,7 @@ type Circler struct {
 	fontFace        *canvas.FontFace
 	verbose         bool
 	cylinderifyData cylinderifyData
+	paletteData     paletteData
 }
 
 // cylinderifyData can be used to cyclindrify images of the original bounds
@@ -60,6 +61,24 @@ type cylinderifyData struct {
 	newWidth int
 	height   int
 	bounds   image.Rectangle
+}
+
+type rgbData struct {
+	r uint8
+	g uint8
+	b uint8
+}
+
+type paletteData struct {
+	rgbMap map[rgbData]color.Color
+}
+
+func (pd paletteData) toPaletteData() color.Palette {
+	out := color.Palette{}
+	for _, c := range pd.rgbMap {
+		out = append(out, c)
+	}
+	return out
 }
 
 func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose bool) (*Circler, error) {
@@ -113,6 +132,9 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		text:     text,
 		verbose:  verbose,
 		fontFace: fontFace,
+		paletteData: paletteData{
+			rgbMap: make(map[rgbData]color.Color),
+		},
 	}, nil
 }
 
@@ -149,6 +171,7 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 		move = movePerFrame * float64(i)
 		imageRect = image.Rect(startOffset+int(math.Round(move)), 0, startOffset+visibleLen+int(math.Round(move)), height)
 		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
+		c.RGBAToPaletteData(subimage)
 		subImagePaletted = c.RGBAToPaletted(subimage)
 		cylindified = c.Cyclindrify(subImagePaletted)
 		images[i] = cylindified
@@ -186,6 +209,32 @@ func (c *Circler) TextRGBAImage(text string) *image.RGBA {
 
 func (c *Circler) palette() color.Palette {
 	return color.Palette{c.bg, c.fg}
+}
+
+func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
+	bounds := src.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			colorAtXY = src.RGBAAt(x, y)
+			rgb := rgbData{
+				r: colorAtXY.R,
+				g: colorAtXY.G,
+				b: colorAtXY.B,
+			}
+			c.paletteData.rgbMap[rgb] = colorAtXY
+		}
+	}
+	for rgb := range c.paletteData.rgbMap {
+		bg := c.bg.(color.RGBA)
+		fg := c.fg.(color.RGBA)
+		bgDist := (rgb.r-bg.R)*(rgb.r-bg.R) + (rgb.g-bg.G)*(rgb.g-bg.G) + (rgb.b-bg.B)*(rgb.b-bg.B)
+		fgDist := (rgb.r-fg.R)*(rgb.r-fg.R) + (rgb.g-fg.G)*(rgb.g-fg.G) + (rgb.b-fg.B)*(rgb.b-fg.B)
+		if fgDist < bgDist {
+			c.paletteData.rgbMap[rgb] = c.fg
+		} else {
+			c.paletteData.rgbMap[rgb] = c.bg
+		}
+	}
 }
 
 // RGBAToPaletted converts an RGBA image to a 2-colour paletted image with min at 0,0.
