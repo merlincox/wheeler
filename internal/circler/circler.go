@@ -17,8 +17,6 @@ import (
 	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
-var colorAtXY color.RGBA
-
 type Circler struct {
 	bg              color.Color
 	fg              color.Color
@@ -190,6 +188,7 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 	bounds := src.Bounds()
 	c.paletteData.rgbMap = make(map[rgbData]color.Color)
 	// collect all unique colours in the source
+	var colorAtXY color.RGBA
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colorAtXY = src.RGBAAt(x, y)
@@ -207,6 +206,7 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 		fg := c.fg.(color.RGBA)
 		bgDist := (rgb.r-bg.R)*(rgb.r-bg.R) + (rgb.g-bg.G)*(rgb.g-bg.G) + (rgb.b-bg.B)*(rgb.b-bg.B)
 		fgDist := (rgb.r-fg.R)*(rgb.r-fg.R) + (rgb.g-fg.G)*(rgb.g-fg.G) + (rgb.b-fg.B)*(rgb.b-fg.B)
+
 		c.paletteData.rgbMap[rgb] = c.bg
 		if fgDist < bgDist {
 			c.paletteData.rgbMap[rgb] = c.fg
@@ -222,7 +222,9 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	yOffset := bounds.Min.Y
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
 	dst := image.NewPaletted(newBounds, c.palette())
-
+	var colorAtXY color.RGBA
+	bgCount := 0
+	fgCount := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colorAtXY = src.RGBAAt(x, y)
@@ -231,10 +233,19 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 				g: colorAtXY.G,
 				b: colorAtXY.B,
 			}
-			dst.Set(x-xOffset, y-yOffset, c.paletteData.rgbMap[rgb])
+			selectedCol, ok := c.paletteData.rgbMap[rgb]
+			if !ok {
+				c.Printf("missing colour in map")
+			}
+			if selectedCol == c.bg {
+				bgCount++
+			} else {
+				fgCount++
+			}
+			dst.Set(x-xOffset, y-yOffset, selectedCol)
 		}
 	}
-
+	c.Printf("bg pixels: %d, fg pixels: %d", bgCount, fgCount)
 	return dst
 }
 
