@@ -6,22 +6,23 @@ import (
 	"image/gif"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/merlincox/wheeler/internal/circler"
 )
 
-func Run() error {
+func Run(version string) error {
 	bgHex := "EEFFFF"
 	fgHex := "FF0000"
 	dpi := 400.0
 	rpm := 2.5
 	fps := 50.0
-	text := "ཨོཾ་ཨཱཿ་ཧཱུྃ་བཛྲ་གུ་རུ་པདྨ་སིདྡྷི་ཧཱུྃ།"
+	text := ""
 	repeat := 1
 	padding := 0.25
-	outputFile := "images/wheeler.gif"
+	outputFile := ""
 	fontSize := 32.0
 	verbose := false
 	fontFilepath := ""
@@ -31,20 +32,37 @@ func Run() error {
 	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
 	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
 	flag.StringVar(&fgHex, "fg", fgHex, "Character colour in hex format such as FF0000 (red)")
-	flag.StringVar(&outputFile, "out", outputFile, "Output file path")
+	flag.StringVar(&outputFile, "out", outputFile, "Output file path (required)")
 	flag.Float64Var(&dpi, "dpi", dpi, "Dots per inch")
 	flag.Float64Var(&rpm, "rpm", rpm, "Rotations per minute")
 	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
 	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
-	flag.BoolVar(&verbose, "verbose", verbose, "Verbose: print details of frame rendering")
-	flag.BoolVar(&silent, "silent", silent, "Silent: print no output")
+	flag.BoolVar(&verbose, "verbose", verbose, "Print details of frame rendering in real time")
+	flag.BoolVar(&silent, "silent", silent, "Print no output")
 	flag.StringVar(&fontFilepath, "fontpath", "", "Font file path (optional)")
+
+	printVersion := flag.Bool("version", false, "Print version and exit")
+	printUsage := flag.Bool("usage", false, "Print usage and exit")
+
+	program := filepath.Base(os.Args[0])
+
+	flag.Usage = func() {
+		fmt.Printf("Usage:  %s [options]\n\n", program)
+		flag.PrintDefaults()
+		fmt.Printf("\n\n"+`Example:  %s -verbose -out images/wheeler.gif -text "ཨོཾ་ཨཱཿ་ཧཱུྃ་བཛྲ་གུ་རུ་པདྨ་སིདྡྷི་ཧཱུྃ།"`+"\n", program)
+	}
 
 	flag.Parse()
 
-	if text == "" {
-		return fmt.Errorf("text is required")
+	if *printVersion {
+		fmt.Printf("%s %s\n", program, version)
+		return nil
+	}
+
+	if *printUsage {
+		flag.Usage()
+		return nil
 	}
 
 	if repeat < 1 {
