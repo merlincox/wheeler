@@ -17,29 +17,7 @@ import (
 	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
-const (
-	R0 = iota
-	G0
-	B0
-	R1
-	G1
-	B1
-	RC
-	GC
-	BC
-	DR0
-	DG0
-	DB0
-	DR1
-	DG1
-	DB1
-	DIST0
-	DIST1
-)
-
 var colorAtXY color.RGBA
-var selectedCol color.Color
-var buffer [20]uint32
 
 type Circler struct {
 	bg              color.Color
@@ -132,9 +110,6 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		text:     text,
 		verbose:  verbose,
 		fontFace: fontFace,
-		paletteData: paletteData{
-			rgbMap: make(map[rgbData]color.Color),
-		},
 	}, nil
 }
 
@@ -146,6 +121,7 @@ func (c *Circler) Printf(format string, args ...any) {
 
 func (c *Circler) BuildGIFData() *gif.GIF {
 	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
+	c.RGBAToPaletteData(imageFromText)
 
 	traversal := imageFromText.Bounds().Dx() / 2
 	height := imageFromText.Bounds().Dy()
@@ -171,7 +147,6 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 		move = movePerFrame * float64(i)
 		imageRect = image.Rect(startOffset+int(math.Round(move)), 0, startOffset+visibleLen+int(math.Round(move)), height)
 		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
-		c.RGBAToPaletteData(subimage)
 		subImagePaletted = c.RGBAToPaletted(subimage)
 		cylindified = c.Cyclindrify(subImagePaletted)
 		images[i] = cylindified
@@ -213,6 +188,8 @@ func (c *Circler) palette() color.Palette {
 
 func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 	bounds := src.Bounds()
+	c.paletteData.rgbMap = make(map[rgbData]color.Color)
+	// collect all unique colours in the source
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colorAtXY = src.RGBAAt(x, y)
@@ -224,21 +201,21 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 			c.paletteData.rgbMap[rgb] = colorAtXY
 		}
 	}
+	// for all unique colours in the source, calc whether the FG or BG is closest
 	for rgb := range c.paletteData.rgbMap {
 		bg := c.bg.(color.RGBA)
 		fg := c.fg.(color.RGBA)
 		bgDist := (rgb.r-bg.R)*(rgb.r-bg.R) + (rgb.g-bg.G)*(rgb.g-bg.G) + (rgb.b-bg.B)*(rgb.b-bg.B)
 		fgDist := (rgb.r-fg.R)*(rgb.r-fg.R) + (rgb.g-fg.G)*(rgb.g-fg.G) + (rgb.b-fg.B)*(rgb.b-fg.B)
+		c.paletteData.rgbMap[rgb] = c.bg
 		if fgDist < bgDist {
 			c.paletteData.rgbMap[rgb] = c.fg
-		} else {
-			c.paletteData.rgbMap[rgb] = c.bg
 		}
 	}
+	c.Printf("Mapped %d unique colours", len(c.paletteData.rgbMap))
 }
 
 // RGBAToPaletted converts an RGBA image to a 2-colour paletted image with min at 0,0.
-// Pixels are classified by the closest Euclidean distance in RGB space.
 func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	bounds := src.Bounds()
 	xOffset := bounds.Min.X
@@ -246,33 +223,15 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
 	dst := image.NewPaletted(newBounds, c.palette())
 
-	// Precompute RGB components for fg and bg
-	buffer[R0], buffer[G0], buffer[B0], _ = c.fg.RGBA()
-	buffer[R1], buffer[G1], buffer[B1], _ = c.bg.RGBA()
-
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colorAtXY = src.RGBAAt(x, y)
-			buffer[RC], buffer[GC], buffer[BC], _ = colorAtXY.RGBA()
-
-			// Distance to foreground
-			buffer[DR0] = buffer[RC] - buffer[R0]
-			buffer[DG0] = buffer[GC] - buffer[G0]
-			buffer[DB0] = buffer[BC] - buffer[B0]
-			buffer[DIST0] = buffer[DR0]*buffer[DR0] + buffer[DG0]*buffer[DG0] + buffer[DB0]*buffer[DB0]
-
-			// Distance to background
-			buffer[DR1] = buffer[RC] - buffer[R1]
-			buffer[DG1] = buffer[GC] - buffer[G1]
-			buffer[DB1] = buffer[BC] - buffer[B1]
-			buffer[DIST1] = buffer[DR1]*buffer[DR1] + buffer[DG1]*buffer[DG1] + buffer[DB1]*buffer[DB1]
-
-			selectedCol = c.bg // default to background
-			if buffer[DIST0] < buffer[DIST1] {
-				selectedCol = c.fg // foreground
+			rgb := rgbData{
+				r: colorAtXY.R,
+				g: colorAtXY.G,
+				b: colorAtXY.B,
 			}
-
-			dst.Set(x-xOffset, y-yOffset, selectedCol)
+			dst.Set(x-xOffset, y-yOffset, c.paletteData.rgbMap[rgb])
 		}
 	}
 
