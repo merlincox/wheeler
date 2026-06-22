@@ -13,32 +13,34 @@ import (
 	"github.com/merlincox/wheeler/internal/circler"
 )
 
+var (
+	text, outputFilepath, fontFilepath string
+	verbose, debug, silent             bool
+)
+
 func Run(version string) error {
+	// default values
 	bgHex := "EEFFFF"
 	fgHex := "FF0000"
 	dpi := 400.0
 	rpm := 2.5
 	fps := 50.0
-	text := ""
 	repeat := 1
 	padding := 0.25
-	outputFile := ""
 	fontSize := 32.0
-	verbose := false
-	fontFilepath := ""
-	silent := false
 
 	flag.StringVar(&text, "text", text, "Text to render (required)")
 	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
 	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
 	flag.StringVar(&fgHex, "fg", fgHex, "Character colour in hex format such as FF0000 (red)")
-	flag.StringVar(&outputFile, "out", outputFile, "Output file path (required)")
+	flag.StringVar(&outputFilepath, "out", outputFilepath, "Output file path (required)")
 	flag.Float64Var(&dpi, "dpi", dpi, "Dots per inch")
 	flag.Float64Var(&rpm, "rpm", rpm, "Rotations per minute")
 	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
 	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
-	flag.BoolVar(&verbose, "verbose", verbose, "Print details of frame rendering in real time")
+	flag.BoolVar(&verbose, "debug", debug, "Print debug messages")
+	flag.BoolVar(&verbose, "verbose", verbose, "Print details of colour mapping and frame rendering in real time")
 	flag.BoolVar(&silent, "silent", silent, "Print no output")
 	flag.StringVar(&fontFilepath, "fontpath", "", "Font file path (optional)")
 
@@ -69,7 +71,7 @@ func Run(version string) error {
 		return fmt.Errorf("repeat must be 1 or greater")
 	}
 
-	if outputFile == "" {
+	if outputFilepath == "" {
 		return fmt.Errorf("output file path is required")
 	}
 
@@ -77,9 +79,13 @@ func Run(version string) error {
 		return fmt.Errorf("cannot be both silent and verbose")
 	}
 
+	if debug {
+		silent = false
+	}
+
 	if !silent && !verbose {
 		defer func() {
-			fmt.Printf(" wrote %s\n", outputFile)
+			fmt.Printf(" wrote %s\n", outputFilepath)
 		}()
 
 		ticker := time.NewTicker(time.Second)
@@ -95,21 +101,21 @@ func Run(version string) error {
 	}
 	text = strings.Repeat(text, repeat)
 
-	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose)
+	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug)
 	if err != nil {
 		return err
 	}
 
 	gifData := cc.BuildGIFData()
 
-	gifFile, err := os.Create(outputFile)
+	gifFile, err := os.Create(outputFilepath)
 	if err != nil {
-		return fmt.Errorf("error creating GIF file '%s': %v", outputFile, err)
+		return fmt.Errorf("error creating GIF file '%s': %v", outputFilepath, err)
 	}
 	defer func() {
 		_ = gifFile.Close()
 		if verbose {
-			log.Printf("Output to GIF file '%s'", outputFile)
+			log.Printf("Output to GIF file '%s'", outputFilepath)
 		}
 	}()
 

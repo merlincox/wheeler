@@ -29,6 +29,7 @@ type Circler struct {
 	verbose         bool
 	cylinderifyData cylinderifyData
 	paletteData     paletteData
+	debug           bool
 }
 
 // cylinderifyData can be used to cyclindrify images of the original bounds
@@ -57,7 +58,7 @@ func (pd paletteData) toPaletteData() color.Palette {
 	return out
 }
 
-func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose bool) (*Circler, error) {
+func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool) (*Circler, error) {
 	if dpi <= 0.0 {
 		return nil, fmt.Errorf("dots per inch must be greater than 0")
 	}
@@ -108,19 +109,26 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		text:     text,
 		verbose:  verbose,
 		fontFace: fontFace,
+		debug:    debug,
 	}, nil
 }
 
 func (c *Circler) Printf(format string, args ...any) {
-	if c.verbose {
+	if c.verbose || c.debug {
+		log.Printf(format, args...)
+	}
+}
+
+func (c *Circler) Debugf(format string, args ...any) {
+	if c.debug {
 		log.Printf(format, args...)
 	}
 }
 
 func (c *Circler) BuildGIFData() *gif.GIF {
 	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
+	c.Debugf("imageFromText size: %s\n", imageFromText.Bounds())
 	c.RGBAToPaletteData(imageFromText)
-
 	traversal := imageFromText.Bounds().Dx() / 2
 	height := imageFromText.Bounds().Dy()
 	startOffset := traversal / 2
@@ -145,8 +153,11 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 		move = movePerFrame * float64(i)
 		imageRect = image.Rect(startOffset+int(math.Round(move)), 0, startOffset+visibleLen+int(math.Round(move)), height)
 		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
+		c.Debugf("subimage size: %s\n", subimage.Bounds())
 		subImagePaletted = c.RGBAToPaletted(subimage)
+		c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
 		cylindified = c.Cyclindrify(subImagePaletted)
+		c.Debugf("cylindified size: %s\n", cylindified.Bounds())
 		images[i] = cylindified
 		delays[i] = frameDelay
 
@@ -188,24 +199,26 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 	bounds := src.Bounds()
 	c.paletteData.rgbMap = make(map[rgbData]color.Color)
 	// collect all unique colours in the source
-	var colorAtXY color.RGBA
+	var colourAtXY color.RGBA
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			colorAtXY = src.RGBAAt(x, y)
+			colourAtXY = src.RGBAAt(x, y)
 			rgb := rgbData{
-				r: colorAtXY.R,
-				g: colorAtXY.G,
-				b: colorAtXY.B,
+				r: colourAtXY.R,
+				g: colourAtXY.G,
+				b: colourAtXY.B,
 			}
-			c.paletteData.rgbMap[rgb] = colorAtXY
+			c.paletteData.rgbMap[rgb] = colourAtXY
 		}
 	}
+	var bgDist, fgDist uint32
 	// for all unique colours in the source, calc whether the FG or BG is closest
 	for rgb := range c.paletteData.rgbMap {
 		bg := c.bg.(color.RGBA)
 		fg := c.fg.(color.RGBA)
-		bgDist := (rgb.r-bg.R)*(rgb.r-bg.R) + (rgb.g-bg.G)*(rgb.g-bg.G) + (rgb.b-bg.B)*(rgb.b-bg.B)
-		fgDist := (rgb.r-fg.R)*(rgb.r-fg.R) + (rgb.g-fg.G)*(rgb.g-fg.G) + (rgb.b-fg.B)*(rgb.b-fg.B)
+		// cast to uint32 values to avoid overflow
+		bgDist = (uint32(rgb.r-bg.R))*(uint32(rgb.r-bg.R)) + (uint32(rgb.g-bg.G))*(uint32(rgb.g-bg.G)) + (uint32(rgb.b-bg.B))*(uint32(rgb.b-bg.B))
+		fgDist = (uint32(rgb.r-fg.R))*(uint32(rgb.r-fg.R)) + (uint32(rgb.g-fg.G))*(uint32(rgb.g-fg.G)) + (uint32(rgb.b-fg.B))*(uint32(rgb.b-fg.B))
 
 		c.paletteData.rgbMap[rgb] = c.bg
 		if fgDist < bgDist {
@@ -222,16 +235,16 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	yOffset := bounds.Min.Y
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
 	dst := image.NewPaletted(newBounds, c.palette())
-	var colorAtXY color.RGBA
+	var colourAtXY color.RGBA
 	bgCount := 0
 	fgCount := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			colorAtXY = src.RGBAAt(x, y)
+			colourAtXY = src.RGBAAt(x, y)
 			rgb := rgbData{
-				r: colorAtXY.R,
-				g: colorAtXY.G,
-				b: colorAtXY.B,
+				r: colourAtXY.R,
+				g: colourAtXY.G,
+				b: colourAtXY.B,
 			}
 			selectedCol, ok := c.paletteData.rgbMap[rgb]
 			if !ok {
@@ -245,7 +258,7 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 			dst.Set(x-xOffset, y-yOffset, selectedCol)
 		}
 	}
-	c.Printf("bg pixels: %d, fg pixels: %d", bgCount, fgCount)
+	c.Debugf("bg pixels: %d, fg pixels: %d", bgCount, fgCount)
 	return dst
 }
 
@@ -310,19 +323,19 @@ func (c *Circler) Cyclindrify(img *image.Paletted) *image.Paletted {
 
 func parseHexColor(s string) (color.RGBA, error) {
 	if len(s) != 6 {
-		return color.RGBA{}, fmt.Errorf("invalid hex color string '%s': must be 6 characters", s)
+		return color.RGBA{}, fmt.Errorf("invalid hex colour string '%s': must be 6 characters", s)
 	}
 	r, err := strconv.ParseUint(s[0:2], 16, 8)
 	if err != nil {
-		return color.RGBA{}, fmt.Errorf("invalid RED hex color element '%s': must be in range 00 to FF", s[0:2])
+		return color.RGBA{}, fmt.Errorf("invalid RED hex colour element '%s': must be in range 00 to FF", s[0:2])
 	}
 	g, err := strconv.ParseUint(s[2:4], 16, 8)
 	if err != nil {
-		return color.RGBA{}, fmt.Errorf("invalid GREEN hex color element '%s': must be in range 00 to FF", s[2:4])
+		return color.RGBA{}, fmt.Errorf("invalid GREEN hex colour element '%s': must be in range 00 to FF", s[2:4])
 	}
 	b, err := strconv.ParseUint(s[4:6], 16, 8)
 	if err != nil {
-		return color.RGBA{}, fmt.Errorf("invalid BLUE hex color element '%s': must be in range 00 to FF", s[4:6])
+		return color.RGBA{}, fmt.Errorf("invalid BLUE hex colour element '%s': must be in range 00 to FF", s[4:6])
 	}
 	return color.RGBA{uint8(r), uint8(g), uint8(b), 255}, nil
 }
