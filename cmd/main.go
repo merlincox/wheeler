@@ -13,7 +13,6 @@ var (
 )
 
 func main() {
-
 	cfg := runner.Config{
 		Text:           text,
 		OutputFilepath: outputFilepath,

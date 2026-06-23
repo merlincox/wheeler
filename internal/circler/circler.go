@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/gif"
-	"image/png"
 	"log"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,22 +18,23 @@ import (
 )
 
 type Circler struct {
-	bg              color.Color
-	fg              color.Color
-	dpi             float64
-	rpm             float64
-	fps             float64
-	padding         float64
-	text            string
-	fontFace        *canvas.FontFace
-	verbose         bool
-	cylinderifyData cylinderifyData
-	paletteData     paletteData
-	debug           bool
+	bg       color.RGBA
+	fg       color.RGBA
+	dpi      float64
+	rpm      float64
+	fps      float64
+	padding  float64
+	text     string
+	fontFace *canvas.FontFace
+	verbose  bool
+	debug    bool
+
+	cylinderData cylinderData
+	colourData   colourData
 }
 
-// cylinderifyData can be used to cyclindrify images of the original bounds
-type cylinderifyData struct {
+// cylinderData can be used to cyclindrify images of the original bounds
+type cylinderData struct {
 	pixelMap map[int]int // maps x positions in new to x positions in old
 	newWidth int
 	height   int
@@ -49,76 +47,40 @@ type rgbData struct {
 	b uint8
 }
 
-type rgbDistance struct {
-	bgDist uint32
-	fgDist uint32
-	rgb    rgbData
+func (rgb rgbData) sqDist(colour color.RGBA) uint32 {
+	// uint8 cast to uint32 values to avoid overflow
+	return (uint32(rgb.r-colour.R))*(uint32(rgb.r-colour.R)) + (uint32(rgb.g-colour.G))*(uint32(rgb.g-colour.G)) + (uint32(rgb.b-colour.B))*(uint32(rgb.b-colour.B))
 }
 
-type rgbDistances []rgbDistance
-
-func (rgbds rgbDistances) Len() int      { return len(rgbds) }
-func (rgbds rgbDistances) Swap(i, j int) { rgbds[i], rgbds[j] = rgbds[j], rgbds[i] }
-func (rgbds rgbDistances) Less(i, j int) bool {
-	if rgbds[i].bgDist == rgbds[j].bgDist {
-		return rgbds[i].fgDist > rgbds[j].fgDist
+func (rgb rgbData) RGBA() color.RGBA {
+	return color.RGBA{
+		R: rgb.r,
+		G: rgb.g,
+		B: rgb.b,
+		A: 255,
 	}
-	return rgbds[i].bgDist < rgbds[j].bgDist
 }
 
-type paletteData struct {
-	rgbMap map[rgbData]color.Color
+type rgbSqDist struct {
+	bgSqDist uint32
+	fgSqDist uint32
+	rgb      rgbData
 }
 
-func (c *Circler) Palette2() color.Palette {
-	out := color.Palette{}
-	if len(c.paletteData.rgbMap) <= 256 {
-		for _, c := range c.paletteData.rgbMap {
-			out = append(out, c)
-		}
-	}
+type rgbSqDists []rgbSqDist
 
-	distances := make(rgbDistances, len(c.paletteData.rgbMap))
-	var bgDist, fgDist uint32
-	bg := c.bg.(color.RGBA)
-	fg := c.fg.(color.RGBA)
+func (rgbds rgbSqDists) Len() int      { return len(rgbds) }
+func (rgbds rgbSqDists) Swap(i, j int) { rgbds[i], rgbds[j] = rgbds[j], rgbds[i] }
+func (rgbds rgbSqDists) Less(i, j int) bool {
+	if rgbds[i].bgSqDist == rgbds[j].bgSqDist {
+		return rgbds[i].fgSqDist > rgbds[j].fgSqDist
+	}
+	return rgbds[i].bgSqDist < rgbds[j].bgSqDist
+}
 
-	// for all unique colours in the source, calc whether the FG or BG is closest
-	i := 0
-	for rgb := range c.paletteData.rgbMap {
-		// cast to uint32 values to avoid overflow
-		bgDist = (uint32(rgb.r-bg.R))*(uint32(rgb.r-bg.R)) + (uint32(rgb.g-bg.G))*(uint32(rgb.g-bg.G)) + (uint32(rgb.b-bg.B))*(uint32(rgb.b-bg.B))
-		fgDist = (uint32(rgb.r-fg.R))*(uint32(rgb.r-fg.R)) + (uint32(rgb.g-fg.G))*(uint32(rgb.g-fg.G)) + (uint32(rgb.b-fg.B))*(uint32(rgb.b-fg.B))
-
-		distances[i] = rgbDistance{
-			rgb:    rgb,
-			fgDist: fgDist,
-			bgDist: bgDist,
-		}
-		i++
-	}
-	sort.Sort(distances)
-
-	ratio := float64(256) / float64(len(distances))
-	for i := 0; i < len(distances); i++ {
-		corrected := int(math.Round(float64(i) * ratio))
-		if corrected != i {
-			c.paletteData.rgbMap[distances[i].rgb] = color.RGBA{
-				R: distances[corrected].rgb.r,
-				G: distances[corrected].rgb.g,
-				B: distances[corrected].rgb.b,
-				A: 255,
-			}
-		}
-	}
-	colourIndex := make(map[color.RGBA]struct{}, 256)
-	for _, c := range c.paletteData.rgbMap {
-		colourIndex[c.(color.RGBA)] = struct{}{}
-	}
-	for c := range colourIndex {
-		out = append(out, c)
-	}
-	return out
+type colourData struct {
+	rgbMap  map[rgbData]color.RGBA
+	palette color.Palette
 }
 
 func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool) (*Circler, error) {
@@ -188,52 +150,89 @@ func (c *Circler) Debugf(format string, args ...any) {
 	}
 }
 
+// palette generates a palette and as necessary remaps the rgbMap to its colours
+func (c *Circler) palette() color.Palette {
+	if c.colourData.palette != nil {
+		return c.colourData.palette
+	}
+	if len(c.colourData.rgbMap) <= 256 {
+		for _, colour := range c.colourData.rgbMap {
+			c.colourData.palette = append(c.colourData.palette, colour)
+		}
+		return c.colourData.palette
+	}
+
+	sqDists := make(rgbSqDists, len(c.colourData.rgbMap))
+	var bgDist, fgDist uint32
+
+	// for all unique colours in the source, calc Square of distance to fg and bg
+	i := 0
+	for rgb := range c.colourData.rgbMap {
+		bgDist = rgb.sqDist(c.bg)
+		fgDist = rgb.sqDist(c.fg)
+
+		sqDists[i] = rgbSqDist{
+			rgb:      rgb,
+			fgSqDist: fgDist,
+			bgSqDist: bgDist,
+		}
+		i++
+	}
+	sort.Sort(sqDists)
+
+	correction := float64(256) / float64(len(sqDists))
+	var corrected int
+	for i := 0; i < len(sqDists); i++ {
+		corrected = int(math.Round(float64(i) * correction))
+		if corrected != i {
+			c.colourData.rgbMap[sqDists[i].rgb] = sqDists[corrected].rgb.RGBA()
+		}
+	}
+	colourIndex := make(map[color.RGBA]struct{}, 256)
+	for _, colour := range c.colourData.rgbMap {
+		colourIndex[colour] = struct{}{}
+	}
+	for colour := range colourIndex {
+		c.colourData.palette = append(c.colourData.palette, colour)
+	}
+	return c.colourData.palette
+}
+
 func (c *Circler) BuildGIFData() *gif.GIF {
 	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
-
-	outFile, err := os.Create("images/output.png")
-	if err != nil {
-		panic(err)
-	}
-	defer outFile.Close()
-	err = png.Encode(outFile, imageFromText)
-	if err != nil {
-		panic(err)
-	}
-
 	c.Debugf("imageFromText size: %s\n", imageFromText.Bounds())
-	c.RGBAToPaletteData(imageFromText)
-	palette := c.Palette2()
+	c.readColourData(imageFromText)
+
 	traversal := imageFromText.Bounds().Dx() / 2
 	height := imageFromText.Bounds().Dy()
 	startOffset := traversal / 2
 	visibleLen := traversal / 2
 
 	secsPerRev := 60.0 / float64(c.rpm)
-	framesPerRev := int(math.Round(secsPerRev * float64(c.fps)))
-	movePerFrame := float64(traversal) / float64(framesPerRev)
-	frameDelay := int(math.Round(100.0 / float64(c.fps))) // 100ths of a second
+	framesPerRev := int(math.Round(secsPerRev * c.fps))
+	advancePerFrame := float64(traversal) / float64(framesPerRev)
+	frameDelay := int(math.Round(100.0 / c.fps)) // 100ths of a second
 
 	images := make([]*image.Paletted, framesPerRev)
 	delays := make([]int, framesPerRev)
 
-	var move float64
+	var advance float64
 	var imageRect image.Rectangle
 	var subimage *image.RGBA
-	var subImagePaletted, cylindified *image.Paletted
+	var subImagePaletted, cylindrified *image.Paletted
 
 	c.Printf("Building GIF data with %d frames per revolution\n", framesPerRev)
 
 	for i := 0; i < framesPerRev; i++ {
-		move = movePerFrame * float64(i)
-		imageRect = image.Rect(startOffset+int(math.Round(move)), 0, startOffset+visibleLen+int(math.Round(move)), height)
+		advance = advancePerFrame * float64(i)
+		imageRect = image.Rect(startOffset+int(math.Round(advance)), 0, startOffset+visibleLen+int(math.Round(advance)), height)
 		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
 		c.Debugf("subimage size: %s\n", subimage.Bounds())
-		subImagePaletted = c.RGBAToPaletted(subimage, palette)
+		subImagePaletted = c.RGBAToPaletted(subimage)
 		c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
-		cylindified = c.Cyclindrify(subImagePaletted)
-		c.Debugf("cylindified size: %s\n", cylindified.Bounds())
-		images[i] = cylindified
+		cylindrified = c.Cyclindrify(subImagePaletted)
+		c.Debugf("cylindrified size: %s\n", cylindrified.Bounds())
+		images[i] = cylindrified
 		delays[i] = frameDelay
 
 		if i%100 == 0 || i == framesPerRev-1 {
@@ -258,21 +257,12 @@ func (c *Circler) TextRGBAImage(text string) *image.RGBA {
 	ctx.Fill()
 	ctx.DrawText(0, yPadding, textLine)
 
-	img := rasterizer.Draw(cvs, canvas.DPI(c.dpi), canvas.DefaultColorSpace)
-	bounds := img.Bounds()
-	frame := image.NewPaletted(bounds, c.palette())
-	draw.FloydSteinberg.Draw(frame, bounds, img, image.Point{})
-
-	return img
+	return rasterizer.Draw(cvs, canvas.DPI(c.dpi), canvas.DefaultColorSpace)
 }
 
-func (c *Circler) palette() color.Palette {
-	return color.Palette{c.bg, c.fg}
-}
-
-func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
+func (c *Circler) readColourData(src *image.RGBA) {
 	bounds := src.Bounds()
-	c.paletteData.rgbMap = make(map[rgbData]color.Color)
+	c.colourData.rgbMap = make(map[rgbData]color.RGBA)
 	// collect all unique colours in the source
 	var colourAtXY color.RGBA
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
@@ -283,20 +273,20 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 				g: colourAtXY.G,
 				b: colourAtXY.B,
 			}
-			c.paletteData.rgbMap[rgb] = colourAtXY
+			c.colourData.rgbMap[rgb] = colourAtXY
 		}
 	}
 
-	c.Printf("Mapped %d unique colours", len(c.paletteData.rgbMap))
+	c.Printf("Mapped %d unique colours", len(c.colourData.rgbMap))
 }
 
-// RGBAToPaletted converts an RGBA image to a 2-colour paletted image with min at 0,0.
-func (c *Circler) RGBAToPaletted(src *image.RGBA, palette color.Palette) *image.Paletted {
+// RGBAToPaletted converts an RGBA image to a paletted image with min at 0,0.
+func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	bounds := src.Bounds()
 	xOffset := bounds.Min.X
 	yOffset := bounds.Min.Y
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
-	dst := image.NewPaletted(newBounds, palette)
+	dst := image.NewPaletted(newBounds, c.palette())
 	var colourAtXY color.RGBA
 	bgCount := 0
 	fgCount := 0
@@ -308,7 +298,7 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA, palette color.Palette) *image.
 				g: colourAtXY.G,
 				b: colourAtXY.B,
 			}
-			selectedCol, ok := c.paletteData.rgbMap[rgb]
+			selectedCol, ok := c.colourData.rgbMap[rgb]
 			if !ok {
 				c.Printf("missing colour in map")
 			}
@@ -324,8 +314,8 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA, palette color.Palette) *image.
 	return dst
 }
 
-// makeCyclindrifyData returns a cylinderifyData that can be used to cyclindrify images of the same bounds
-func makeCyclindrifyData(img *image.Paletted) cylinderifyData {
+// makeCyclindrifyData returns a cylinderData that can be used to cyclindrify images of the same bounds
+func makeCyclindrifyData(img *image.Paletted) cylinderData {
 	bounds := img.Bounds()
 	oldWidthI := bounds.Dx()
 	height := bounds.Dy()
@@ -333,7 +323,7 @@ func makeCyclindrifyData(img *image.Paletted) cylinderifyData {
 	oldWidthF := float64(oldWidthI)
 	newWidthF := oldWidthF * 2.0 / math.Pi
 	newWidthI := int(math.Round(newWidthF))
-	cyl := cylinderifyData{
+	cyl := cylinderData{
 		pixelMap: make(map[int]int, newWidthI),
 		newWidth: newWidthI,
 		height:   height,
@@ -363,19 +353,21 @@ func makeCyclindrifyData(img *image.Paletted) cylinderifyData {
 }
 
 func (c *Circler) Cyclindrify(img *image.Paletted) *image.Paletted {
-	if c.cylinderifyData.pixelMap == nil || c.cylinderifyData.bounds != img.Bounds() {
-		c.cylinderifyData = makeCyclindrifyData(img)
+	if c.cylinderData.pixelMap == nil || c.cylinderData.bounds != img.Bounds() {
+		c.cylinderData = makeCyclindrifyData(img)
 	}
-	newRect := image.Rect(0, 0, c.cylinderifyData.newWidth, c.cylinderifyData.height)
+	newRect := image.Rect(0, 0, c.cylinderData.newWidth, c.cylinderData.height)
 
 	// Create a blank canvas for the output
 	distorted := image.NewPaletted(newRect, img.Palette)
-	for newXI := 0; newXI < c.cylinderifyData.newWidth; newXI++ {
-		oldXI, ok := c.cylinderifyData.pixelMap[newXI]
+	var oldXI, y int
+	var ok bool
+	for newXI := 0; newXI < c.cylinderData.newWidth; newXI++ {
+		oldXI, ok = c.cylinderData.pixelMap[newXI]
 		if !ok {
 			continue
 		}
-		for y := 0; y < c.cylinderifyData.height; y++ {
+		for y = 0; y < c.cylinderData.height; y++ {
 			distorted.Set(newXI, y, img.At(oldXI, y))
 		}
 	}
@@ -399,5 +391,5 @@ func parseHexColor(s string) (color.RGBA, error) {
 	if err != nil {
 		return color.RGBA{}, fmt.Errorf("invalid BLUE hex colour element '%s': must be in range 00 to FF", s[4:6])
 	}
-	return color.RGBA{uint8(r), uint8(g), uint8(b), 255}, nil
+	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}, nil
 }
