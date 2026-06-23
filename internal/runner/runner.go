@@ -13,12 +13,22 @@ import (
 	"github.com/merlincox/wheeler/internal/circler"
 )
 
+type Config struct {
+	Text           string
+	OutputFilepath string
+	FontFilepath   string
+	Version        string
+	Silent         bool
+	Debug          bool
+	Verbose        bool
+}
+
 var (
 	text, outputFilepath, fontFilepath string
 	verbose, debug, silent             bool
 )
 
-func Run(version string) error {
+func Run(cfg Config) error {
 	// default values
 	bgHex := "EEFFFF"
 	fgHex := "FF0000"
@@ -29,20 +39,20 @@ func Run(version string) error {
 	padding := 0.25
 	fontSize := 32.0
 
-	flag.StringVar(&text, "text", text, "Text to render (required)")
+	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
 	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
 	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
 	flag.StringVar(&fgHex, "fg", fgHex, "Character colour in hex format such as FF0000 (red)")
-	flag.StringVar(&outputFilepath, "out", outputFilepath, "Output file path (required)")
+	flag.StringVar(&outputFilepath, "out", cfg.OutputFilepath, "Output file path (required)")
 	flag.Float64Var(&dpi, "dpi", dpi, "Dots per inch")
 	flag.Float64Var(&rpm, "rpm", rpm, "Rotations per minute")
 	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
 	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
-	flag.BoolVar(&verbose, "debug", debug, "Print debug messages")
-	flag.BoolVar(&verbose, "verbose", verbose, "Print details of colour mapping and frame rendering in real time")
-	flag.BoolVar(&silent, "silent", silent, "Print no output")
-	flag.StringVar(&fontFilepath, "fontpath", "", "Font file path (optional)")
+	flag.BoolVar(&verbose, "debug", cfg.Debug, "Print debug messages")
+	flag.BoolVar(&verbose, "verbose", cfg.Verbose, "Print details of colour mapping and frame rendering in real time")
+	flag.BoolVar(&silent, "silent", cfg.Silent, "Print no output")
+	flag.StringVar(&fontFilepath, "fontpath", cfg.FontFilepath, "Font file path (optional)")
 
 	printVersion := flag.Bool("version", false, "Print version and exit")
 	printUsage := flag.Bool("usage", false, "Print usage and exit")
@@ -58,7 +68,7 @@ func Run(version string) error {
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Printf("%s %s\n", program, version)
+		fmt.Printf("%s %s\n", program, cfg.Version)
 		return nil
 	}
 

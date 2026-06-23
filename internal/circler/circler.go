@@ -6,9 +6,12 @@ import (
 	"image/color"
 	"image/draw"
 	"image/gif"
+	"image/png"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -46,13 +49,73 @@ type rgbData struct {
 	b uint8
 }
 
+type rgbDistance struct {
+	bgDist uint32
+	fgDist uint32
+	rgb    rgbData
+}
+
+type rgbDistances []rgbDistance
+
+func (rgbds rgbDistances) Len() int      { return len(rgbds) }
+func (rgbds rgbDistances) Swap(i, j int) { rgbds[i], rgbds[j] = rgbds[j], rgbds[i] }
+func (rgbds rgbDistances) Less(i, j int) bool {
+	if rgbds[i].bgDist == rgbds[j].bgDist {
+		return rgbds[i].fgDist > rgbds[j].fgDist
+	}
+	return rgbds[i].bgDist < rgbds[j].bgDist
+}
+
 type paletteData struct {
 	rgbMap map[rgbData]color.Color
 }
 
-func (pd paletteData) toPaletteData() color.Palette {
+func (c *Circler) Palette2() color.Palette {
 	out := color.Palette{}
-	for _, c := range pd.rgbMap {
+	if len(c.paletteData.rgbMap) <= 256 {
+		for _, c := range c.paletteData.rgbMap {
+			out = append(out, c)
+		}
+	}
+
+	distances := make(rgbDistances, len(c.paletteData.rgbMap))
+	var bgDist, fgDist uint32
+	bg := c.bg.(color.RGBA)
+	fg := c.fg.(color.RGBA)
+
+	// for all unique colours in the source, calc whether the FG or BG is closest
+	i := 0
+	for rgb := range c.paletteData.rgbMap {
+		// cast to uint32 values to avoid overflow
+		bgDist = (uint32(rgb.r-bg.R))*(uint32(rgb.r-bg.R)) + (uint32(rgb.g-bg.G))*(uint32(rgb.g-bg.G)) + (uint32(rgb.b-bg.B))*(uint32(rgb.b-bg.B))
+		fgDist = (uint32(rgb.r-fg.R))*(uint32(rgb.r-fg.R)) + (uint32(rgb.g-fg.G))*(uint32(rgb.g-fg.G)) + (uint32(rgb.b-fg.B))*(uint32(rgb.b-fg.B))
+
+		distances[i] = rgbDistance{
+			rgb:    rgb,
+			fgDist: fgDist,
+			bgDist: bgDist,
+		}
+		i++
+	}
+	sort.Sort(distances)
+
+	ratio := float64(256) / float64(len(distances))
+	for i := 0; i < len(distances); i++ {
+		corrected := int(math.Round(float64(i) * ratio))
+		if corrected != i {
+			c.paletteData.rgbMap[distances[i].rgb] = color.RGBA{
+				R: distances[corrected].rgb.r,
+				G: distances[corrected].rgb.g,
+				B: distances[corrected].rgb.b,
+				A: 255,
+			}
+		}
+	}
+	colourIndex := make(map[color.RGBA]struct{}, 256)
+	for _, c := range c.paletteData.rgbMap {
+		colourIndex[c.(color.RGBA)] = struct{}{}
+	}
+	for c := range colourIndex {
 		out = append(out, c)
 	}
 	return out
@@ -127,8 +190,20 @@ func (c *Circler) Debugf(format string, args ...any) {
 
 func (c *Circler) BuildGIFData() *gif.GIF {
 	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
+
+	outFile, err := os.Create("images/output.png")
+	if err != nil {
+		panic(err)
+	}
+	defer outFile.Close()
+	err = png.Encode(outFile, imageFromText)
+	if err != nil {
+		panic(err)
+	}
+
 	c.Debugf("imageFromText size: %s\n", imageFromText.Bounds())
 	c.RGBAToPaletteData(imageFromText)
+	palette := c.Palette2()
 	traversal := imageFromText.Bounds().Dx() / 2
 	height := imageFromText.Bounds().Dy()
 	startOffset := traversal / 2
@@ -154,7 +229,7 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 		imageRect = image.Rect(startOffset+int(math.Round(move)), 0, startOffset+visibleLen+int(math.Round(move)), height)
 		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
 		c.Debugf("subimage size: %s\n", subimage.Bounds())
-		subImagePaletted = c.RGBAToPaletted(subimage)
+		subImagePaletted = c.RGBAToPaletted(subimage, palette)
 		c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
 		cylindified = c.Cyclindrify(subImagePaletted)
 		c.Debugf("cylindified size: %s\n", cylindified.Bounds())
@@ -211,30 +286,17 @@ func (c *Circler) RGBAToPaletteData(src *image.RGBA) {
 			c.paletteData.rgbMap[rgb] = colourAtXY
 		}
 	}
-	var bgDist, fgDist uint32
-	// for all unique colours in the source, calc whether the FG or BG is closest
-	for rgb := range c.paletteData.rgbMap {
-		bg := c.bg.(color.RGBA)
-		fg := c.fg.(color.RGBA)
-		// cast to uint32 values to avoid overflow
-		bgDist = (uint32(rgb.r-bg.R))*(uint32(rgb.r-bg.R)) + (uint32(rgb.g-bg.G))*(uint32(rgb.g-bg.G)) + (uint32(rgb.b-bg.B))*(uint32(rgb.b-bg.B))
-		fgDist = (uint32(rgb.r-fg.R))*(uint32(rgb.r-fg.R)) + (uint32(rgb.g-fg.G))*(uint32(rgb.g-fg.G)) + (uint32(rgb.b-fg.B))*(uint32(rgb.b-fg.B))
 
-		c.paletteData.rgbMap[rgb] = c.bg
-		if fgDist < bgDist {
-			c.paletteData.rgbMap[rgb] = c.fg
-		}
-	}
 	c.Printf("Mapped %d unique colours", len(c.paletteData.rgbMap))
 }
 
 // RGBAToPaletted converts an RGBA image to a 2-colour paletted image with min at 0,0.
-func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
+func (c *Circler) RGBAToPaletted(src *image.RGBA, palette color.Palette) *image.Paletted {
 	bounds := src.Bounds()
 	xOffset := bounds.Min.X
 	yOffset := bounds.Min.Y
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
-	dst := image.NewPaletted(newBounds, c.palette())
+	dst := image.NewPaletted(newBounds, palette)
 	var colourAtXY color.RGBA
 	bgCount := 0
 	fgCount := 0

@@ -33,3 +33,4 @@ go.work.sum
 /images/
 /bin/
 /text.txt
+/cmd/init.go
