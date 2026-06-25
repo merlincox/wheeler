@@ -100,11 +100,11 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		return nil, fmt.Errorf("text is required")
 	}
 
-	bg, err := parseHexColor(bgHex)
+	bg, err := parseHexColour(bgHex)
 	if err != nil {
 		return nil, err
 	}
-	fg, err := parseHexColor(fgHex)
+	fg, err := parseHexColour(fgHex)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +375,7 @@ func (c *Circler) Cyclindrify(img *image.Paletted) *image.Paletted {
 	return distorted
 }
 
-func parseHexColor(s string) (color.RGBA, error) {
+func parseHexColour(s string) (color.RGBA, error) {
 	if len(s) != 6 {
 		return color.RGBA{}, fmt.Errorf("invalid hex colour string '%s': must be 6 characters", s)
 	}
