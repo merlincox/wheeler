@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -38,21 +39,24 @@ func Run(cfg Config) error {
 	repeat := 1
 	padding := 0.25
 	fontSize := 32.0
+	routines := runtime.NumCPU()
 
-	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
 	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
 	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
 	flag.StringVar(&fgHex, "fg", fgHex, "Character colour in hex format such as FF0000 (red)")
-	flag.StringVar(&outputFilepath, "out", cfg.OutputFilepath, "Output file path (required)")
 	flag.Float64Var(&dpi, "dpi", dpi, "Dots per inch")
 	flag.Float64Var(&rpm, "rpm", rpm, "Rotations per minute")
 	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
 	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
-	flag.BoolVar(&verbose, "debug", cfg.Debug, "Print debug messages")
+	flag.IntVar(&routines, "routines", routines, "Limit of simultaneous goroutines to use")
+
+	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
+	flag.StringVar(&outputFilepath, "out", cfg.OutputFilepath, "Output file path (required)")
+	flag.StringVar(&fontFilepath, "fontpath", cfg.FontFilepath, "Font file path (optional)")
+	flag.BoolVar(&debug, "debug", cfg.Debug, "Print debug messages")
 	flag.BoolVar(&verbose, "verbose", cfg.Verbose, "Print details of colour mapping and frame rendering in real time")
 	flag.BoolVar(&silent, "silent", cfg.Silent, "Print no output")
-	flag.StringVar(&fontFilepath, "fontpath", cfg.FontFilepath, "Font file path (optional)")
 
 	printVersion := flag.Bool("version", false, "Print version and exit")
 	printUsage := flag.Bool("usage", false, "Print usage and exit")
@@ -111,7 +115,7 @@ func Run(cfg Config) error {
 	}
 	text = strings.Repeat(text, repeat)
 
-	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug)
+	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug, routines)
 	if err != nil {
 		return err
 	}

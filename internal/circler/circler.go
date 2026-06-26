@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/merlincox/wheeler/internal/tibetan"
 	"github.com/tdewolff/canvas"
@@ -28,9 +30,11 @@ type Circler struct {
 	fontFace *canvas.FontFace
 	verbose  bool
 	debug    bool
+	routines int
 
 	cylinderData cylinderData
 	colourData   colourData
+	mutex        sync.Mutex
 }
 
 // cylinderData can be used to cyclindrify images of the original bounds
@@ -83,7 +87,7 @@ type colourData struct {
 	palette color.Palette
 }
 
-func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool) (*Circler, error) {
+func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool, routines int) (*Circler, error) {
 	if dpi <= 0.0 {
 		return nil, fmt.Errorf("dots per inch must be greater than 0")
 	}
@@ -135,6 +139,7 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		verbose:  verbose,
 		fontFace: fontFace,
 		debug:    debug,
+		routines: routines,
 	}, nil
 }
 
@@ -152,6 +157,9 @@ func (c *Circler) Debugf(format string, args ...any) {
 
 // palette generates a palette and as necessary remaps the rgbMap to its colours
 func (c *Circler) palette() color.Palette {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	if c.colourData.palette != nil {
 		return c.colourData.palette
 	}
@@ -199,8 +207,9 @@ func (c *Circler) palette() color.Palette {
 }
 
 func (c *Circler) BuildGIFData() *gif.GIF {
+	now := time.Now()
 	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
-	c.Debugf("imageFromText size: %s\n", imageFromText.Bounds())
+	c.Printf("Text image size: %s\n", imageFromText.Bounds())
 	c.readColourData(imageFromText)
 
 	traversal := imageFromText.Bounds().Dx() / 2
@@ -216,35 +225,48 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 	images := make([]*image.Paletted, framesPerRev)
 	delays := make([]int, framesPerRev)
 
-	var advance float64
-	var imageRect image.Rectangle
-	var subimage *image.RGBA
-	var subImagePaletted, cylindrified *image.Paletted
+	c.Printf("Building GIF data with %d frames per revolution, using %d goroutines\n", framesPerRev, c.routines)
 
-	c.Printf("Building GIF data with %d frames per revolution\n", framesPerRev)
+	semaphore := make(chan struct{}, c.routines)
 
-	for i := 0; i < framesPerRev; i++ {
-		advance = advancePerFrame * float64(i)
-		imageRect = image.Rect(startOffset+int(math.Round(advance)), 0, startOffset+visibleLen+int(math.Round(advance)), height)
-		subimage = imageFromText.SubImage(imageRect).(*image.RGBA)
-		c.Debugf("subimage size: %s\n", subimage.Bounds())
-		subImagePaletted = c.RGBAToPaletted(subimage)
-		c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
-		cylindrified = c.Cyclindrify(subImagePaletted)
-		c.Debugf("cylindrified size: %s\n", cylindrified.Bounds())
-		images[i] = cylindrified
-		delays[i] = frameDelay
+	var wg sync.WaitGroup
 
-		if i%100 == 0 || i == framesPerRev-1 {
-			c.Printf("Built frame %d of %d\n", i+1, framesPerRev)
-		}
+	for j := 0; j < framesPerRev; j++ {
+		wg.Add(1)
+
+		// This blocks if the semaphore channel is full
+		semaphore <- struct{}{}
+
+		go func(i int) {
+			defer wg.Done()
+			// Release the slot when the goroutine finishes
+			defer func() { <-semaphore }()
+			advance := advancePerFrame * float64(i)
+			imageRect := image.Rect(startOffset+int(math.Round(advance)), 0, startOffset+visibleLen+int(math.Round(advance)), height)
+			subimage := imageFromText.SubImage(imageRect).(*image.RGBA)
+			c.Debugf("subimage size: %s\n", subimage.Bounds())
+			subImagePaletted := c.RGBAToPaletted(subimage)
+			c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
+			cylindrified := c.Cyclindrify(subImagePaletted)
+			c.Debugf("cylindrified size: %s\n", cylindrified.Bounds())
+			images[i] = cylindrified
+			delays[i] = frameDelay
+
+			if i%100 == 0 || i == framesPerRev-1 {
+				c.Printf("Built frame %d of %d\n", i+1, framesPerRev)
+			}
+
+		}(j)
+
 	}
-
-	return &gif.GIF{
+	wg.Wait()
+	gifData := &gif.GIF{
 		Image:     images,
 		Delay:     delays,
 		LoopCount: 0, // loop forever
 	}
+	c.Printf("Built GIF in %s\n", time.Since(now))
+	return gifData
 }
 
 func (c *Circler) TextRGBAImage(text string) *image.RGBA {
@@ -261,6 +283,9 @@ func (c *Circler) TextRGBAImage(text string) *image.RGBA {
 }
 
 func (c *Circler) readColourData(src *image.RGBA) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	bounds := src.Bounds()
 	c.colourData.rgbMap = make(map[rgbData]color.RGBA)
 	// collect all unique colours in the source
