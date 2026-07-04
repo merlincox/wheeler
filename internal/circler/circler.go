@@ -352,8 +352,8 @@ func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
 	return dst
 }
 
-// buildCyclinderData builds cylinderData that can be used to cyclindrify successive images with the same bounds
-func (c *Circler) buildCyclinderData(img *image.Paletted) {
+// buildCylinderData builds cylinderData which can cyclindrify successive images with the same bounds
+func (c *Circler) buildCylinderData(img *image.Paletted) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -396,7 +396,7 @@ func (c *Circler) buildCyclinderData(img *image.Paletted) {
 
 func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
 	if c.cylinderData == nil {
-		c.buildCyclinderData(img)
+		c.buildCylinderData(img)
 	}
 	newRect := image.Rect(0, 0, c.cylinderData.newWidth, c.cylinderData.height)
 
