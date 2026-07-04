@@ -40,10 +40,30 @@ type Circler struct {
 
 // cylinderData can be used to cyclindrify images of the original bounds
 type cylinderData struct {
-	pixelMap map[int]int // maps x positions in new to x positions in old
-	newWidth int
-	height   int
-	bounds   image.Rectangle
+	pixelMap    map[int]int // maps x positions in new to x positions in old
+	innerWidth  int
+	innerHeight int
+	bounds      image.Rectangle
+	yOffset     int
+	xOffset     int
+}
+
+func (d cylinderData) FullRect() image.Rectangle {
+	return image.Rect(
+		0,
+		0,
+		d.innerWidth+(2*d.xOffset),
+		d.innerHeight+(2*d.yOffset),
+	)
+}
+
+func (d cylinderData) InnerRect() image.Rectangle {
+	return image.Rect(
+		d.xOffset,
+		d.yOffset,
+		d.innerWidth+d.xOffset,
+		d.innerHeight+d.yOffset,
+	)
 }
 
 type rgbData struct {
@@ -219,6 +239,7 @@ func (c *Circler) palette() color.Palette {
 }
 
 func (c *Circler) BuildGIFData() *gif.GIF {
+	c.Printf("Building GIF data using %d goroutines\n", c.routines)
 	now := time.Now()
 	imageFromText := c.createTextImage(strings.Repeat(c.text, 2))
 	c.Printf("Text image size: %s\n", imageFromText.Bounds())
@@ -237,7 +258,7 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 	images := make([]*image.Paletted, framesPerRev)
 	delays := make([]int, framesPerRev)
 
-	c.Printf("Building GIF data with %d frames per revolution, using %d goroutines\n", framesPerRev, c.routines)
+	c.Printf("GIF data requires with %d frames per rotation\n", framesPerRev)
 
 	semaphore := make(chan struct{}, c.routines)
 
@@ -314,7 +335,7 @@ func (c *Circler) readColourData(src *image.RGBA) {
 		}
 	}
 
-	c.Printf("Mapped %d unique colours", len(c.colourData.rgbMap))
+	c.Printf("Read %d unique colours", len(c.colourData.rgbMap))
 }
 
 // rgbaToPaletted converts an RGBA image to a paletted image with its min at 0,0.
@@ -352,23 +373,55 @@ func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
 	return dst
 }
 
+func round(f float64) int {
+	return int(math.Round(f))
+}
+
 // buildCylinderData builds cylinderData which can cyclindrify successive images with the same bounds
 func (c *Circler) buildCylinderData(img *image.Paletted) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if c.cylinderData != nil {
+		return
+	}
 
 	bounds := img.Bounds()
 	oldWidthI := bounds.Dx()
-	height := bounds.Dy()
+	oldHeightI := bounds.Dy()
 
 	oldWidthF := float64(oldWidthI)
+	oldHeightF := float64(oldHeightI)
 	newWidthF := oldWidthF * 2.0 / math.Pi
-	newWidthI := int(math.Round(newWidthF))
-	cyl := cylinderData{
-		pixelMap: make(map[int]int, newWidthI),
-		newWidth: newWidthI,
-		height:   height,
-		bounds:   bounds,
+	newWidthI := round(newWidthF)
+
+	data := cylinderData{
+		pixelMap:    make(map[int]int, newWidthI),
+		innerWidth:  newWidthI,
+		innerHeight: oldHeightI,
+		bounds:      bounds,
+	}
+
+	cylinderRatio := newWidthF / oldHeightF
+	c.Printf("Unpadded cylinder ratio: %f\n", cylinderRatio)
+	c.Printf("Desired ratio: %f\n", c.ratio)
+	if c.ratio != 0.0 && c.ratio != cylinderRatio {
+		// c.ratio == desired ratio of width to height
+		if c.ratio < cylinderRatio {
+			c.Printf("Needs Y padding\n")
+			desiredHeight := newWidthF / c.ratio
+			c.Printf("Desired height: %f\n", desiredHeight)
+			yOffsetF := (desiredHeight - oldHeightF) / 2.0
+			c.Printf("Y offset: %f\n", yOffsetF)
+			data.yOffset = round(yOffsetF)
+		}
+		if c.ratio > cylinderRatio {
+			c.Printf("Needs X padding\n")
+			desiredWidth := oldHeightF * c.ratio
+			c.Printf("Desired width: %f\n", desiredWidth)
+			xOffsetF := (desiredWidth - newWidthF) / 2.0
+			c.Printf("X offset: %f\n", xOffsetF)
+			data.xOffset = round(xOffsetF)
+		}
 	}
 
 	// Cylinder effect parameters
@@ -380,41 +433,40 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 		newXF = float64(newXI)
 		radians = math.Acos((radius - newXF) / radius)
 		oldXF = oldWidthF * radians / math.Pi
-		oldXI = int(math.Round(oldXF))
+		oldXI = round(oldXF)
 		// Source Y remains the same
 		if oldXI < 0 || oldXI >= oldWidthI {
 			continue
 		}
-		for y = 0; y < height; y++ {
-			cyl.pixelMap[newXI] = oldXI
+		for y = 0; y < oldHeightI; y++ {
+			data.pixelMap[newXI] = oldXI
 		}
 	}
 
-	c.cylinderData = &cyl
+	c.cylinderData = &data
 	c.Printf("Cylinder data created: %v\n", c.cylinderData.bounds)
 }
 
 func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
-	if c.cylinderData == nil {
-		c.buildCylinderData(img)
-	}
-	newRect := image.Rect(0, 0, c.cylinderData.newWidth, c.cylinderData.height)
+	c.buildCylinderData(img)
+	newRect := c.cylinderData.FullRect()
 
 	// Create a blank canvas for the output
-	distorted := image.NewPaletted(newRect, img.Palette)
+	// Palette must have bg at index 0
+	cylindrified := image.NewPaletted(newRect, img.Palette)
 	var oldXI, y int
 	var ok bool
-	for newXI := 0; newXI < c.cylinderData.newWidth; newXI++ {
-		oldXI, ok = c.cylinderData.pixelMap[newXI]
+	for newXI := c.cylinderData.xOffset; newXI < c.cylinderData.innerWidth+c.cylinderData.xOffset; newXI++ {
+		oldXI, ok = c.cylinderData.pixelMap[newXI-c.cylinderData.xOffset]
 		if !ok {
 			continue
 		}
-		for y = 0; y < c.cylinderData.height; y++ {
-			distorted.Set(newXI, y, img.At(oldXI, y))
+		for y = c.cylinderData.yOffset; y < c.cylinderData.innerHeight+c.cylinderData.yOffset; y++ {
+			cylindrified.Set(newXI, y, img.At(oldXI, y-c.cylinderData.yOffset))
 		}
 	}
 
-	return distorted
+	return cylindrified
 }
 
 func parseHexColour(s string) (color.RGBA, error) {
