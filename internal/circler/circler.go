@@ -31,8 +31,9 @@ type Circler struct {
 	verbose  bool
 	debug    bool
 	routines int
+	ratio    float64
 
-	cylinderData cylinderData
+	cylinderData *cylinderData
 	colourData   colourData
 	mutex        sync.Mutex
 }
@@ -87,7 +88,7 @@ type colourData struct {
 	palette color.Palette
 }
 
-func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool, routines int) (*Circler, error) {
+func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool, routines int, ratio float64) (*Circler, error) {
 	if dpi <= 0.0 {
 		return nil, fmt.Errorf("dots per inch must be greater than 0")
 	}
@@ -140,6 +141,7 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		fontFace: fontFace,
 		debug:    debug,
 		routines: routines,
+		ratio:    ratio,
 	}, nil
 }
 
@@ -164,8 +166,13 @@ func (c *Circler) palette() color.Palette {
 		return c.colourData.palette
 	}
 	if len(c.colourData.rgbMap) <= 256 {
+		c.colourData.palette = make(color.Palette, 0, len(c.colourData.rgbMap))
+		//put bg in zero position
+		c.colourData.palette = append(c.colourData.palette, c.bg)
 		for _, colour := range c.colourData.rgbMap {
-			c.colourData.palette = append(c.colourData.palette, colour)
+			if colour != c.bg {
+				c.colourData.palette = append(c.colourData.palette, colour)
+			}
 		}
 		return c.colourData.palette
 	}
@@ -200,15 +207,20 @@ func (c *Circler) palette() color.Palette {
 	for _, colour := range c.colourData.rgbMap {
 		colourIndex[colour] = struct{}{}
 	}
+	c.colourData.palette = make(color.Palette, 0, 256)
+	//put bg in zero position
+	c.colourData.palette = append(c.colourData.palette, c.bg)
 	for colour := range colourIndex {
-		c.colourData.palette = append(c.colourData.palette, colour)
+		if colour != c.bg {
+			c.colourData.palette = append(c.colourData.palette, colour)
+		}
 	}
 	return c.colourData.palette
 }
 
 func (c *Circler) BuildGIFData() *gif.GIF {
 	now := time.Now()
-	imageFromText := c.TextRGBAImage(strings.Repeat(c.text, 2))
+	imageFromText := c.createTextImage(strings.Repeat(c.text, 2))
 	c.Printf("Text image size: %s\n", imageFromText.Bounds())
 	c.readColourData(imageFromText)
 
@@ -245,9 +257,9 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 			imageRect := image.Rect(startOffset+int(math.Round(advance)), 0, startOffset+visibleLen+int(math.Round(advance)), height)
 			subimage := imageFromText.SubImage(imageRect).(*image.RGBA)
 			c.Debugf("subimage size: %s\n", subimage.Bounds())
-			subImagePaletted := c.RGBAToPaletted(subimage)
+			subImagePaletted := c.rgbaToPaletted(subimage)
 			c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
-			cylindrified := c.Cyclindrify(subImagePaletted)
+			cylindrified := c.cyclindrify(subImagePaletted)
 			c.Debugf("cylindrified size: %s\n", cylindrified.Bounds())
 			images[i] = cylindrified
 			delays[i] = frameDelay
@@ -269,7 +281,7 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 	return gifData
 }
 
-func (c *Circler) TextRGBAImage(text string) *image.RGBA {
+func (c *Circler) createTextImage(text string) *image.RGBA {
 	textLine := canvas.NewTextLine(c.fontFace, text, canvas.Left)
 	yPadding := textLine.Height * c.padding
 	cvs := canvas.New(textLine.Width, textLine.Height)
@@ -305,12 +317,13 @@ func (c *Circler) readColourData(src *image.RGBA) {
 	c.Printf("Mapped %d unique colours", len(c.colourData.rgbMap))
 }
 
-// RGBAToPaletted converts an RGBA image to a paletted image with min at 0,0.
-func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
+// rgbaToPaletted converts an RGBA image to a paletted image with its min at 0,0.
+func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
 	bounds := src.Bounds()
 	xOffset := bounds.Min.X
 	yOffset := bounds.Min.Y
 	newBounds := image.Rect(0, 0, bounds.Max.X-xOffset, bounds.Max.Y-yOffset)
+	// calling c.palette() for the first time maps the existing RGBA colours into a max 256-colour palette
 	dst := image.NewPaletted(newBounds, c.palette())
 	var colourAtXY color.RGBA
 	bgCount := 0
@@ -339,8 +352,11 @@ func (c *Circler) RGBAToPaletted(src *image.RGBA) *image.Paletted {
 	return dst
 }
 
-// makeCyclindrifyData returns a cylinderData that can be used to cyclindrify images of the same bounds
-func makeCyclindrifyData(img *image.Paletted) cylinderData {
+// buildCyclinderData builds cylinderData that can be used to cyclindrify successive images with the same bounds
+func (c *Circler) buildCyclinderData(img *image.Paletted) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	bounds := img.Bounds()
 	oldWidthI := bounds.Dx()
 	height := bounds.Dy()
@@ -374,12 +390,13 @@ func makeCyclindrifyData(img *image.Paletted) cylinderData {
 		}
 	}
 
-	return cyl
+	c.cylinderData = &cyl
+	c.Printf("Cylinder data created: %v\n", c.cylinderData.bounds)
 }
 
-func (c *Circler) Cyclindrify(img *image.Paletted) *image.Paletted {
-	if c.cylinderData.pixelMap == nil || c.cylinderData.bounds != img.Bounds() {
-		c.cylinderData = makeCyclindrifyData(img)
+func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
+	if c.cylinderData == nil {
+		c.buildCyclinderData(img)
 	}
 	newRect := image.Rect(0, 0, c.cylinderData.newWidth, c.cylinderData.height)
 

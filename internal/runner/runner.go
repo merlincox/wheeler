@@ -40,6 +40,7 @@ func Run(cfg Config) error {
 	padding := 0.25
 	fontSize := 32.0
 	routines := runtime.NumCPU()
+	ratio := 0.0
 
 	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
 	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
@@ -49,6 +50,7 @@ func Run(cfg Config) error {
 	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
 	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
+	flag.Float64Var(&ratio, "ratio", ratio, "Ratio of width to height. 0.0 means do not adjust")
 	flag.IntVar(&routines, "routines", routines, "Limit of simultaneous goroutines to use")
 
 	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
@@ -115,7 +117,7 @@ func Run(cfg Config) error {
 	}
 	text = strings.Repeat(text, repeat)
 
-	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug, routines)
+	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug, routines, ratio)
 	if err != nil {
 		return err
 	}
