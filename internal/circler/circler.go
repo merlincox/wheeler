@@ -43,9 +43,9 @@ type cylinderData struct {
 	pixelMap    map[int]int // maps x positions in new to x positions in old
 	innerWidth  int
 	innerHeight int
-	bounds      image.Rectangle
-	yOffset     int
-	xOffset     int
+	//bounds      image.Rectangle
+	yOffset int
+	xOffset int
 }
 
 func (d cylinderData) FullRect() image.Rectangle {
@@ -187,7 +187,7 @@ func (c *Circler) palette() color.Palette {
 	}
 	if len(c.colourData.rgbMap) <= 256 {
 		c.colourData.palette = make(color.Palette, 0, len(c.colourData.rgbMap))
-		//put bg in zero position
+		// put bg in zero position
 		c.colourData.palette = append(c.colourData.palette, c.bg)
 		for _, colour := range c.colourData.rgbMap {
 			if colour != c.bg {
@@ -218,7 +218,7 @@ func (c *Circler) palette() color.Palette {
 	correction := float64(256) / float64(len(sqDists))
 	var corrected int
 	for i := 0; i < len(sqDists); i++ {
-		corrected = int(math.Round(float64(i) * correction))
+		corrected = round(float64(i) * correction)
 		if corrected != i {
 			c.colourData.rgbMap[sqDists[i].rgb] = sqDists[corrected].rgb.RGBA()
 		}
@@ -228,7 +228,7 @@ func (c *Circler) palette() color.Palette {
 		colourIndex[colour] = struct{}{}
 	}
 	c.colourData.palette = make(color.Palette, 0, 256)
-	//put bg in zero position
+	// put bg in zero position
 	c.colourData.palette = append(c.colourData.palette, c.bg)
 	for colour := range colourIndex {
 		if colour != c.bg {
@@ -241,19 +241,19 @@ func (c *Circler) palette() color.Palette {
 func (c *Circler) BuildGIFData() *gif.GIF {
 	c.Printf("Building GIF data using %d goroutines\n", c.routines)
 	now := time.Now()
-	imageFromText := c.createTextImage(strings.Repeat(c.text, 2))
-	c.Printf("Text image size: %s\n", imageFromText.Bounds())
-	c.readColourData(imageFromText)
+	textImage := c.createTextImage(strings.Repeat(c.text, 2))
+	c.Printf("Text image size: %s\n", textImage.Bounds())
+	c.readColourData(textImage)
 
-	traversal := imageFromText.Bounds().Dx() / 2
-	height := imageFromText.Bounds().Dy()
+	traversal := textImage.Bounds().Dx() / 2
+	height := textImage.Bounds().Dy()
 	startOffset := traversal / 2
 	visibleLen := traversal / 2
 
 	secsPerRev := 60.0 / float64(c.rpm)
-	framesPerRev := int(math.Round(secsPerRev * c.fps))
+	framesPerRev := round(secsPerRev * c.fps)
 	advancePerFrame := float64(traversal) / float64(framesPerRev)
-	frameDelay := int(math.Round(100.0 / c.fps)) // 100ths of a second
+	frameDelay := round(100.0 / c.fps) // 100ths of a second
 
 	images := make([]*image.Paletted, framesPerRev)
 	delays := make([]int, framesPerRev)
@@ -274,9 +274,10 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 			defer wg.Done()
 			// Release the slot when the goroutine finishes
 			defer func() { <-semaphore }()
+
 			advance := advancePerFrame * float64(i)
-			imageRect := image.Rect(startOffset+int(math.Round(advance)), 0, startOffset+visibleLen+int(math.Round(advance)), height)
-			subimage := imageFromText.SubImage(imageRect).(*image.RGBA)
+			imageRect := image.Rect(startOffset+round(advance), 0, startOffset+visibleLen+round(advance), height)
+			subimage := textImage.SubImage(imageRect).(*image.RGBA)
 			c.Debugf("subimage size: %s\n", subimage.Bounds())
 			subImagePaletted := c.rgbaToPaletted(subimage)
 			c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
@@ -308,6 +309,7 @@ func (c *Circler) createTextImage(text string) *image.RGBA {
 	cvs := canvas.New(textLine.Width, textLine.Height)
 	ctx := canvas.NewContext(cvs)
 	ctx.SetFillColor(c.bg)
+	ctx.SetStrokeColor(c.bg)
 	ctx.DrawPath(0, 0, canvas.Rectangle(textLine.Width, textLine.Height))
 	ctx.Fill()
 	ctx.DrawText(0, yPadding, textLine)
@@ -398,13 +400,12 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 		pixelMap:    make(map[int]int, newWidthI),
 		innerWidth:  newWidthI,
 		innerHeight: oldHeightI,
-		bounds:      bounds,
 	}
 
 	cylinderRatio := newWidthF / oldHeightF
 	c.Printf("Unpadded cylinder ratio: %f\n", cylinderRatio)
-	c.Printf("Desired ratio: %f\n", c.ratio)
 	if c.ratio != 0.0 && c.ratio != cylinderRatio {
+		c.Printf("Desired ratio: %f\n", c.ratio)
 		// c.ratio == desired ratio of width to height
 		if c.ratio < cylinderRatio {
 			c.Printf("Needs Y padding\n")
@@ -444,7 +445,7 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 	}
 
 	c.cylinderData = &data
-	c.Printf("Cylinder data created: %v\n", c.cylinderData.bounds)
+	c.Printf("Cylinder data created: %v within %v\n", c.cylinderData.InnerRect(), c.cylinderData.FullRect())
 }
 
 func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
@@ -454,15 +455,15 @@ func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
 	// Create a blank canvas for the output
 	// Palette must have bg at index 0
 	cylindrified := image.NewPaletted(newRect, img.Palette)
-	var oldXI, y int
+	var oldXI, oldYI int
 	var ok bool
-	for newXI := c.cylinderData.xOffset; newXI < c.cylinderData.innerWidth+c.cylinderData.xOffset; newXI++ {
-		oldXI, ok = c.cylinderData.pixelMap[newXI-c.cylinderData.xOffset]
+	for newXI := 0; newXI < c.cylinderData.innerWidth; newXI++ {
+		oldXI, ok = c.cylinderData.pixelMap[newXI]
 		if !ok {
 			continue
 		}
-		for y = c.cylinderData.yOffset; y < c.cylinderData.innerHeight+c.cylinderData.yOffset; y++ {
-			cylindrified.Set(newXI, y, img.At(oldXI, y-c.cylinderData.yOffset))
+		for oldYI = 0; oldYI < c.cylinderData.innerHeight; oldYI++ {
+			cylindrified.Set(newXI+c.cylinderData.xOffset, oldYI+c.cylinderData.yOffset, img.At(oldXI, oldYI))
 		}
 	}
 

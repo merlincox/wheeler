@@ -18,40 +18,55 @@ type Config struct {
 	Text           string
 	OutputFilepath string
 	FontFilepath   string
-	Version        string
+	BgHex          string
+	FgHex          string
+	DPI            float64
+	RPM            float64
+	FPS            float64
+	Padding        float64
+	FontSize       float64
+	Ratio          float64
+	Repeat         int
+	Routines       int
 	Silent         bool
 	Debug          bool
 	Verbose        bool
 }
 
-var (
-	text, outputFilepath, fontFilepath string
-	verbose, debug, silent             bool
-)
+func DefaultConfig() Config {
+	return Config{
+		BgHex:    "EEFFFF",
+		FgHex:    "FF0000",
+		DPI:      400.0,
+		RPM:      2.5,
+		FPS:      50.0,
+		Repeat:   1,
+		Padding:  0.25,
+		FontSize: 32.0,
+		Routines: runtime.NumCPU(),
+		Ratio:    0.0,
+	}
+}
 
-func Run(cfg Config) error {
-	// default values
-	bgHex := "EEFFFF"
-	fgHex := "FF0000"
-	dpi := 400.0
-	rpm := 2.5
-	fps := 50.0
-	repeat := 1
-	padding := 0.25
-	fontSize := 32.0
-	routines := runtime.NumCPU()
-	ratio := 1.0
+func Run(cfg Config, version string) error {
+	var (
+		repeat, routines                        int
+		bgHex, fgHex                            string
+		dpi, rpm, fps, fontSize, padding, ratio float64
+		text, outputFilepath, fontFilepath      string
+		debug, verbose, silent                  bool
+	)
 
-	flag.IntVar(&repeat, "repeat", repeat, "Number of times to repeat the text as a single line")
-	flag.StringVar(&bgHex, "bg", bgHex, "Background colour in hex format such as FFFFFF (white)")
-	flag.StringVar(&fgHex, "fg", fgHex, "Character colour in hex format such as FF0000 (red)")
-	flag.Float64Var(&dpi, "dpi", dpi, "Dots per inch")
-	flag.Float64Var(&rpm, "rpm", rpm, "Rotations per minute")
-	flag.Float64Var(&fps, "fps", fps, "GIF frames per second")
-	flag.Float64Var(&fontSize, "size", fontSize, "Font size")
-	flag.Float64Var(&padding, "padding", padding, "Base padding as a fraction of the character height")
-	flag.Float64Var(&ratio, "ratio", ratio, "Desired ratio of width to height. 0.0 means do not adjust")
-	flag.IntVar(&routines, "routines", routines, "Limit of simultaneous goroutines to use")
+	flag.IntVar(&repeat, "repeat", cfg.Repeat, "Number of times to repeat the text as a single line")
+	flag.StringVar(&bgHex, "bg", cfg.BgHex, "Background colour in hex format such as FFFFFF (white)")
+	flag.StringVar(&fgHex, "fg", cfg.FgHex, "Character colour in hex format such as FF0000 (red)")
+	flag.Float64Var(&dpi, "dpi", cfg.DPI, "Dots per inch")
+	flag.Float64Var(&rpm, "rpm", cfg.RPM, "Rotations per minute")
+	flag.Float64Var(&fps, "fps", cfg.FPS, "GIF frames per second")
+	flag.Float64Var(&fontSize, "size", cfg.FontSize, "Font size")
+	flag.Float64Var(&padding, "padding", cfg.Padding, "Base padding as a fraction of the character height")
+	flag.Float64Var(&ratio, "ratio", cfg.Ratio, "Desired ratio of width to height. 0.0 means do not adjust")
+	flag.IntVar(&routines, "routines", cfg.Routines, "Limit of simultaneous goroutines to use")
 
 	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
 	flag.StringVar(&outputFilepath, "out", cfg.OutputFilepath, "Output file path (required)")
@@ -74,7 +89,7 @@ func Run(cfg Config) error {
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Printf("%s %s\n", program, cfg.Version)
+		fmt.Printf("%s %s\n", program, version)
 		return nil
 	}
 
