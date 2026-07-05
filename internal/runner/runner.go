@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ type Config struct {
 	FPS            float64
 	Padding        float64
 	FontSize       float64
-	Ratio          float64
+	Aspect         string
 	Repeat         int
 	Routines       int
 	Silent         bool
@@ -44,17 +45,16 @@ func DefaultConfig() Config {
 		Padding:  0.25,
 		FontSize: 32.0,
 		Routines: runtime.NumCPU(),
-		Ratio:    0.0,
 	}
 }
 
 func Run(cfg Config, version string) error {
 	var (
-		repeat, routines                        int
-		bgHex, fgHex                            string
-		dpi, rpm, fps, fontSize, padding, ratio float64
-		text, outputFilepath, fontFilepath      string
-		debug, verbose, silent                  bool
+		repeat, routines                   int
+		bgHex, fgHex, aspect               string
+		dpi, rpm, fps, fontSize, padding   float64
+		text, outputFilepath, fontFilepath string
+		debug, verbose, silent             bool
 	)
 
 	flag.IntVar(&repeat, "repeat", cfg.Repeat, "Number of times to repeat the text as a single line")
@@ -65,7 +65,7 @@ func Run(cfg Config, version string) error {
 	flag.Float64Var(&fps, "fps", cfg.FPS, "GIF frames per second")
 	flag.Float64Var(&fontSize, "size", cfg.FontSize, "Font size")
 	flag.Float64Var(&padding, "padding", cfg.Padding, "Base padding as a fraction of the character height")
-	flag.Float64Var(&ratio, "ratio", cfg.Ratio, "Desired ratio of width to height. 0.0 means do not adjust")
+	flag.StringVar(&aspect, "aspect", cfg.Aspect, "Desired aspect ratio of width to height in the form W:H")
 	flag.IntVar(&routines, "routines", cfg.Routines, "Limit of simultaneous goroutines to use")
 
 	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
@@ -108,6 +108,11 @@ func Run(cfg Config, version string) error {
 
 	if silent && verbose {
 		return fmt.Errorf("cannot be both silent and verbose")
+	}
+
+	ratio, err := parseAspectRatio(aspect)
+	if err != nil {
+		return err
 	}
 
 	if debug {
@@ -155,4 +160,24 @@ func Run(cfg Config, version string) error {
 	}
 
 	return nil
+}
+
+func parseAspectRatio(aspect string) (float64, error) {
+	if aspect == "" {
+		return 0, nil
+	}
+	parts := strings.Split(aspect, ":")
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid aspect ratio '%s', should be in the form width:height", aspect)
+	}
+	width, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid aspect ratio width '%s'", parts[0])
+	}
+	height, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid aspect ratio height '%s'", parts[1])
+	}
+
+	return width / height, nil
 }

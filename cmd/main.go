@@ -13,8 +13,7 @@ var (
 )
 
 func main() {
-	cfg := defaults
-	if err := runner.Run(cfg, version); err != nil {
+	if err := runner.Run(defaults, version); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
