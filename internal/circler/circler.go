@@ -48,11 +48,11 @@ type Circler struct {
 
 // cylinderData can be used to cyclindrify images of the original bounds
 type cylinderData struct {
-	xMap   map[int]int // maps x positions in new image to x positions in old image
-	yMap   map[int]int // maps y positions in new image to y positions in old image
-	width  int
-	height int
-	mode   stretchingMode
+	xMap           map[int]int // maps x positions in new image to x positions in old image
+	yMap           map[int]int // maps y positions in new image to y positions in old image
+	width          int
+	height         int
+	stretchingMode stretchingMode
 }
 
 func (d cylinderData) rect() image.Rectangle {
@@ -69,7 +69,7 @@ func (d cylinderData) oldX(new int) int {
 }
 
 func (d cylinderData) oldY(new int) int {
-	if d.mode != yStretching {
+	if d.stretchingMode != yStretching {
 		return new
 	}
 	return d.yMap[new]
@@ -431,14 +431,14 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 		}
 	}
 	data := cylinderData{
-		height: round(newHeightF),
-		width:  round(newWidthF),
-		mode:   mode,
+		height:         round(newHeightF),
+		width:          round(newWidthF),
+		stretchingMode: mode,
 	}
 
 	data.xMap = make(map[int]int, data.width)
 
-	if data.mode == yStretching {
+	if data.stretchingMode == yStretching {
 		data.yMap = make(map[int]int, data.height)
 	}
 
@@ -450,7 +450,7 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 		// Calculate the angle on the cylinder for the current x
 		newXF = float64(x)
 		// reversing the ratio stretching (if any)
-		if data.mode == xStretching {
+		if data.stretchingMode == xStretching {
 			newXF = newXF * unstretchedNewWidth / newWidthF
 		}
 		angle = math.Acos((radius - newXF) / radius)
@@ -462,13 +462,13 @@ func (c *Circler) buildCylinderData(img *image.Paletted) {
 		data.xMap[x] = oldXI
 	}
 
-	if data.mode == yStretching {
+	if data.stretchingMode == yStretching {
 		for y = 0; y < data.height; y++ {
 			data.yMap[y] = round(float64(y) * oldHeightF / newHeightF)
 		}
 	}
 	c.cylinderData = &data
-	c.Printf("Cylinder data created: (%d, %d)\n", c.cylinderData.rect().Dx(), c.cylinderData.rect().Dy())
+	c.Printf("Cylinder mapping created: (%d, %d)\n", c.cylinderData.rect().Dx(), c.cylinderData.rect().Dy())
 }
 
 func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
@@ -479,7 +479,7 @@ func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
 	// Palette must have bg at index 0
 	cylindrified := image.NewPaletted(newRect, img.Palette)
 
-	// fill canvas with colours mapped from old image
+	// fill canvas with colours mapped from the old image
 	var oldX, y, oldY int
 	for x := 0; x < c.cylinderData.width; x++ {
 		oldX = c.cylinderData.oldX(x)

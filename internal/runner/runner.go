@@ -168,7 +168,7 @@ func parseAspectRatio(aspect string) (float64, error) {
 	}
 	parts := strings.Split(aspect, ":")
 	if len(parts) != 2 {
-		return 0, fmt.Errorf("invalid aspect ratio '%s', should be in the form width:height", aspect)
+		return 0, fmt.Errorf("invalid aspect ratio '%s', it should be in the form width:height", aspect)
 	}
 	width, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
