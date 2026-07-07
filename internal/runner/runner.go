@@ -30,7 +30,6 @@ type Config struct {
 	Repeat         int
 	Routines       int
 	Silent         bool
-	Debug          bool
 	Verbose        bool
 }
 
@@ -54,7 +53,7 @@ func Run(cfg Config, version string) error {
 		bgHex, fgHex, aspect               string
 		dpi, rpm, fps, fontSize, padding   float64
 		text, outputFilepath, fontFilepath string
-		debug, verbose, silent             bool
+		verbose, silent                    bool
 	)
 
 	flag.IntVar(&repeat, "repeat", cfg.Repeat, "Number of times to repeat the text as a single line")
@@ -71,7 +70,6 @@ func Run(cfg Config, version string) error {
 	flag.StringVar(&text, "text", cfg.Text, "Text to render (required)")
 	flag.StringVar(&outputFilepath, "out", cfg.OutputFilepath, "Output file path (required)")
 	flag.StringVar(&fontFilepath, "fontpath", cfg.FontFilepath, "Font file path (optional)")
-	flag.BoolVar(&debug, "debug", cfg.Debug, "Print debug messages")
 	flag.BoolVar(&verbose, "verbose", cfg.Verbose, "Print details of colour mapping and frame rendering in real time")
 	flag.BoolVar(&silent, "silent", cfg.Silent, "Print no output")
 
@@ -115,10 +113,6 @@ func Run(cfg Config, version string) error {
 		return err
 	}
 
-	if debug {
-		silent = false
-	}
-
 	if !silent && !verbose {
 		defer func() {
 			fmt.Printf(" wrote %s\n", outputFilepath)
@@ -137,7 +131,7 @@ func Run(cfg Config, version string) error {
 	}
 	text = strings.Repeat(text, repeat)
 
-	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, debug, routines, ratio)
+	cc, err := circler.New(dpi, rpm, fps, fontSize, padding, text, bgHex, fgHex, fontFilepath, verbose, routines, ratio)
 	if err != nil {
 		return err
 	}

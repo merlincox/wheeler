@@ -37,25 +37,24 @@ type Circler struct {
 	text     string
 	fontFace *canvas.FontFace
 	verbose  bool
-	debug    bool
 	routines int
 	ratio    float64
 
-	cylinderData *cylinderData
-	colourData   colourData
-	mutex        sync.Mutex
+	projector  *projector
+	colourData colourData
+	mutex      sync.Mutex
 }
 
-// cylinderData can be used to cyclindrify images of the original bounds
-type cylinderData struct {
-	xMap           map[int]int // maps x positions in new image to x positions in old image
-	yMap           map[int]int // maps y positions in new image to y positions in old image
-	width          int
-	height         int
-	stretchingMode stretchingMode
+// projector can be used to project old images to projected images
+type projector struct {
+	xMap           map[int]int    // maps x positions in the projected image to x positions in the original image
+	yMap           map[int]int    // maps y positions in the projected image to y positions in the original image
+	width          int            // width of projected image
+	height         int            // height of projected image
+	stretchingMode stretchingMode // aspect ratio stretching: X, Y or none
 }
 
-func (d cylinderData) rect() image.Rectangle {
+func (d projector) rect() image.Rectangle {
 	return image.Rect(
 		0,
 		0,
@@ -64,23 +63,33 @@ func (d cylinderData) rect() image.Rectangle {
 	)
 }
 
-func (d cylinderData) oldX(new int) int {
-	return d.xMap[new]
+func (d projector) originalX(x int) int {
+	return d.xMap[x]
 }
 
-func (d cylinderData) oldY(new int) int {
+func (d projector) originalY(y int) int {
 	if d.stretchingMode != yStretching {
-		return new
+		return y
 	}
-	return d.yMap[new]
+	return d.yMap[y]
 }
 
+// rgbData is an RGB colour with implied alpha = 255
 type rgbData struct {
 	r uint8
 	g uint8
 	b uint8
 }
 
+func fromRGBA(colour color.RGBA) rgbData {
+	return rgbData{
+		r: colour.R,
+		g: colour.G,
+		b: colour.B,
+	}
+}
+
+// sqDist is the squared distance to an RGBA colour
 func (rgb rgbData) sqDist(colour color.RGBA) uint32 {
 	// uint8 cast to uint32 values to avoid overflow
 	return (uint32(rgb.r-colour.R))*(uint32(rgb.r-colour.R)) + (uint32(rgb.g-colour.G))*(uint32(rgb.g-colour.G)) + (uint32(rgb.b-colour.B))*(uint32(rgb.b-colour.B))
@@ -117,7 +126,7 @@ type colourData struct {
 	palette color.Palette
 }
 
-func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose, debug bool, routines int, ratio float64) (*Circler, error) {
+func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilepath string, verbose bool, routines int, ratio float64) (*Circler, error) {
 	if dpi <= 0.0 {
 		return nil, fmt.Errorf("dots per inch must be greater than 0")
 	}
@@ -168,20 +177,13 @@ func New(dpi, rpm, fps, fontSize, padding float64, text, bgHex, fgHex, fontFilep
 		text:     text,
 		verbose:  verbose,
 		fontFace: fontFace,
-		debug:    debug,
 		routines: routines,
 		ratio:    ratio,
 	}, nil
 }
 
 func (c *Circler) Printf(format string, args ...any) {
-	if c.verbose || c.debug {
-		log.Printf(format, args...)
-	}
-}
-
-func (c *Circler) Debugf(format string, args ...any) {
-	if c.debug {
+	if c.verbose {
 		log.Printf(format, args...)
 	}
 }
@@ -195,6 +197,7 @@ func (c *Circler) palette() color.Palette {
 		return c.colourData.palette
 	}
 	if len(c.colourData.rgbMap) <= 256 {
+		// all the colours will fit in a palette suitable for a GIF
 		c.colourData.palette = make(color.Palette, 0, len(c.colourData.rgbMap))
 		// put bg in zero position
 		c.colourData.palette = append(c.colourData.palette, c.bg)
@@ -209,7 +212,7 @@ func (c *Circler) palette() color.Palette {
 	sqDists := make(rgbSqDists, len(c.colourData.rgbMap))
 	var bgDist, fgDist uint32
 
-	// for all unique colours in the source, calc Square of distance to fg and bg
+	// for all unique colours in the source, calc squared distance to fg and bg
 	i := 0
 	for rgb := range c.colourData.rgbMap {
 		bgDist = rgb.sqDist(c.bg)
@@ -222,6 +225,7 @@ func (c *Circler) palette() color.Palette {
 		}
 		i++
 	}
+	// sort by distance to bg
 	sort.Sort(sqDists)
 
 	correction := float64(256) / float64(len(sqDists))
@@ -251,6 +255,7 @@ func (c *Circler) palette() color.Palette {
 func (c *Circler) BuildGIFData() *gif.GIF {
 	c.Printf("Building GIF data using %d goroutines\n", c.routines)
 	now := time.Now()
+	// textImage has the text twice so the visible text can move across the end-start boundry
 	textImage := c.createTextImage(strings.Repeat(c.text, 2))
 	c.Printf("Full text image size: (%d, %d)\n", textImage.Bounds().Dx(), textImage.Bounds().Dy())
 	c.readColourData(textImage)
@@ -260,21 +265,21 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 	startOffset := traversal / 2
 	visibleLen := traversal / 2
 
-	secsPerRev := 60.0 / float64(c.rpm)
-	framesPerRev := round(secsPerRev * c.fps)
-	advancePerFrame := float64(traversal) / float64(framesPerRev)
+	secsPerRotation := 60.0 / float64(c.rpm)
+	framesPerRotation := round(secsPerRotation * c.fps)
+	advancePerFrame := float64(traversal) / float64(framesPerRotation)
 	frameDelay := round(100.0 / c.fps) // 100ths of a second
 
-	images := make([]*image.Paletted, framesPerRev)
-	delays := make([]int, framesPerRev)
+	images := make([]*image.Paletted, framesPerRotation)
+	delays := make([]int, framesPerRotation)
 
-	c.Printf("GIF data requires %d frames per rotation\n", framesPerRev)
+	c.Printf("GIF data requires %d frames per rotation\n", framesPerRotation)
 
 	semaphore := make(chan struct{}, c.routines)
 
 	var wg sync.WaitGroup
 
-	for j := 0; j < framesPerRev; j++ {
+	for j := 0; j < framesPerRotation; j++ {
 		wg.Add(1)
 
 		// This blocks if the semaphore channel is full
@@ -286,18 +291,15 @@ func (c *Circler) BuildGIFData() *gif.GIF {
 			defer func() { <-semaphore }()
 
 			advance := advancePerFrame * float64(i)
-			imageRect := image.Rect(startOffset+round(advance), 0, startOffset+visibleLen+round(advance), height)
-			subimage := textImage.SubImage(imageRect).(*image.RGBA)
-			c.Debugf("subimage size: %s\n", subimage.Bounds())
-			subImagePaletted := c.rgbaToPaletted(subimage)
-			c.Debugf("subImagePaletted size: %s\n", subImagePaletted.Bounds())
-			cylindrified := c.cyclindrify(subImagePaletted)
-			c.Debugf("cylindrified size: %s\n", cylindrified.Bounds())
-			images[i] = cylindrified
+			visibleRect := image.Rect(startOffset+round(advance), 0, startOffset+visibleLen+round(advance), height)
+			visibleText := textImage.SubImage(visibleRect).(*image.RGBA)
+			palettedVisibleText := c.convertToPaletted(visibleText)
+			projected := c.project(palettedVisibleText)
+			images[i] = projected
 			delays[i] = frameDelay
 
-			if i%100 == 0 || i == framesPerRev-1 {
-				c.Printf("Built frame %d of %d\n", i+1, framesPerRev)
+			if i%100 == 0 || i == framesPerRotation-1 {
+				c.Printf("Built frame %d of %d\n", i+1, framesPerRotation)
 			}
 
 		}(j)
@@ -338,11 +340,7 @@ func (c *Circler) readColourData(src *image.RGBA) {
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colourAtXY = src.RGBAAt(x, y)
-			rgb := rgbData{
-				r: colourAtXY.R,
-				g: colourAtXY.G,
-				b: colourAtXY.B,
-			}
+			rgb := fromRGBA(colourAtXY)
 			c.colourData.rgbMap[rgb] = colourAtXY
 		}
 	}
@@ -350,8 +348,8 @@ func (c *Circler) readColourData(src *image.RGBA) {
 	c.Printf("Found %d unique colours", len(c.colourData.rgbMap))
 }
 
-// rgbaToPaletted converts an RGBA image to a paletted image with its min at 0,0.
-func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
+// convertToPaletted converts an RGBA image to a paletted image with its min at 0,0.
+func (c *Circler) convertToPaletted(src *image.RGBA) *image.Paletted {
 	bounds := src.Bounds()
 	xOffset := bounds.Min.X
 	yOffset := bounds.Min.Y
@@ -359,8 +357,6 @@ func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
 	// calling c.palette() for the first time maps the existing RGBA colours into a max 256-colour palette
 	dst := image.NewPaletted(newBounds, c.palette())
 	var colourAtXY color.RGBA
-	bgCount := 0
-	fgCount := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colourAtXY = src.RGBAAt(x, y)
@@ -373,15 +369,9 @@ func (c *Circler) rgbaToPaletted(src *image.RGBA) *image.Paletted {
 			if !ok {
 				c.Printf("missing colour in map")
 			}
-			if selectedCol == c.bg {
-				bgCount++
-			} else {
-				fgCount++
-			}
 			dst.Set(x-xOffset, y-yOffset, selectedCol)
 		}
 	}
-	c.Debugf("bg pixels: %d, fg pixels: %d", bgCount, fgCount)
 	return dst
 }
 
@@ -389,107 +379,108 @@ func round(f float64) int {
 	return int(math.Round(f))
 }
 
-// buildCylinderData builds cylinderData which can cyclindrify successive images with the same bounds
-func (c *Circler) buildCylinderData(img *image.Paletted) {
+// buildProjector builds the projector which can project successive images with the same bounds
+// this handles both cylinder projection and aspect ratio stretching
+func (c *Circler) buildProjector(img *image.Paletted) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	if c.cylinderData != nil {
+	if c.projector != nil {
 		return
 	}
 
 	bounds := img.Bounds()
 
-	oldWidthI := bounds.Dx()
-	oldHeightI := bounds.Dy()
-	oldWidthF := float64(oldWidthI)
-	oldHeightF := float64(oldHeightI)
+	originalWidth := bounds.Dx()
+	originalHeight := bounds.Dy()
+	originalWidthF := float64(originalWidth)
+	originalHeightF := float64(originalHeight)
 
-	// apply cylinder conversion but not stretching
-	unstretchedNewWidth := oldWidthF * 2.0 / math.Pi
-	newWidthF := unstretchedNewWidth
+	// apply cylinder conversion but not stretching (yet)
+	unstretchedProjectedWidthF := originalWidthF * 2.0 / math.Pi
+	projectedWidthF := unstretchedProjectedWidthF
 
-	newHeightF := oldHeightF
-	c.Printf("Unstretched cylinder: (%d, %d)\n", round(unstretchedNewWidth), oldHeightI)
+	projectedHeightF := originalHeightF
+	c.Printf("Unstretched projection dimensions: (%d, %d)\n", round(unstretchedProjectedWidthF), originalHeight)
 
-	cylinderRatio := unstretchedNewWidth / oldHeightF
-	c.Printf("Unstretched cylinder ratio: %.2f\n", cylinderRatio)
+	cylinderRatio := unstretchedProjectedWidthF / originalHeightF
+	c.Printf("Unstretched projection ratio: %.2f\n", cylinderRatio)
 	var mode stretchingMode
 	if c.ratio != 0.0 && c.ratio != cylinderRatio {
-		c.Printf("Desired ratio: %.2f\n", c.ratio)
-		// c.ratio == desired ratio of width to height
+		c.Printf("Desired aspect ratio: %.2f\n", c.ratio)
+		// c.ratio == desired aspect ratio of width to height
 		if c.ratio < cylinderRatio {
-			newHeightF = unstretchedNewWidth / c.ratio
-			c.Printf("Needs Y stretching to height: %.2f\n", newHeightF)
+			projectedHeightF = unstretchedProjectedWidthF / c.ratio
+			c.Printf("Needs Y stretching to height: %.2f\n", projectedHeightF)
 
 			mode = yStretching
 		}
 		if c.ratio > cylinderRatio {
-			newWidthF = oldHeightF * c.ratio
-			c.Printf("Needs X stretching to width: %.2f\n", newWidthF)
+			projectedWidthF = originalHeightF * c.ratio
+			c.Printf("Needs X stretching to width: %.2f\n", projectedWidthF)
 
 			mode = xStretching
 		}
 	}
-	data := cylinderData{
-		height:         round(newHeightF),
-		width:          round(newWidthF),
+	c.projector = &projector{
+		height:         round(projectedHeightF),
+		width:          round(projectedWidthF),
 		stretchingMode: mode,
 	}
 
-	data.xMap = make(map[int]int, data.width)
+	c.projector.xMap = make(map[int]int, c.projector.width)
 
-	if data.stretchingMode == yStretching {
-		data.yMap = make(map[int]int, data.height)
+	if c.projector.stretchingMode == yStretching {
+		c.projector.yMap = make(map[int]int, c.projector.height)
 	}
 
-	// Cylinder effect parameters
-	radius := unstretchedNewWidth / 2.0
-	var newXF, angle, oldXF float64
-	var oldXI, x, y int
-	for x = 0; x < data.width; x++ {
+	radius := unstretchedProjectedWidthF / 2.0
+
+	var projectedXF, angle, originalXF float64
+	var originalX, x, y int
+
+	for x = 0; x < c.projector.width; x++ {
 		// Calculate the angle on the cylinder for the current x
-		newXF = float64(x)
-		// reversing the ratio stretching (if any)
-		if data.stretchingMode == xStretching {
-			newXF = newXF * unstretchedNewWidth / newWidthF
+		projectedXF = float64(x)
+		// reversing the aspect ratio stretching (if any)
+		if c.projector.stretchingMode == xStretching {
+			projectedXF = projectedXF * unstretchedProjectedWidthF / projectedWidthF
 		}
-		angle = math.Acos((radius - newXF) / radius)
-		oldXF = oldWidthF * angle / math.Pi
-		oldXI = round(oldXF)
-		if oldXI < 0 || oldXI >= oldWidthI {
+		angle = math.Acos((radius - projectedXF) / radius)
+		originalXF = originalWidthF * angle / math.Pi
+		originalX = round(originalXF)
+		if originalX < 0 || originalX >= originalWidth {
 			continue
 		}
-		data.xMap[x] = oldXI
+		c.projector.xMap[x] = originalX
 	}
 
-	if data.stretchingMode == yStretching {
-		for y = 0; y < data.height; y++ {
-			data.yMap[y] = round(float64(y) * oldHeightF / newHeightF)
+	if c.projector.stretchingMode == yStretching {
+		for y = 0; y < c.projector.height; y++ {
+			c.projector.yMap[y] = round(float64(y) * originalHeightF / projectedHeightF)
 		}
 	}
-	c.cylinderData = &data
-	c.Printf("Cylinder mapping created: (%d, %d)\n", c.cylinderData.rect().Dx(), c.cylinderData.rect().Dy())
+	c.Printf("Projector created: (%d, %d)\n", c.projector.rect().Dx(), c.projector.rect().Dy())
 }
 
-func (c *Circler) cyclindrify(img *image.Paletted) *image.Paletted {
-	c.buildCylinderData(img)
-	newRect := c.cylinderData.rect()
+func (c *Circler) project(img *image.Paletted) *image.Paletted {
+	c.buildProjector(img)
+	newRect := c.projector.rect()
 
-	// Create a blank canvas for the output
+	// Create a blank canvas for the projected output
 	// Palette must have bg at index 0
-	cylindrified := image.NewPaletted(newRect, img.Palette)
+	projected := image.NewPaletted(newRect, img.Palette)
 
 	// fill canvas with colours mapped from the old image
 	var oldX, y, oldY int
-	for x := 0; x < c.cylinderData.width; x++ {
-		oldX = c.cylinderData.oldX(x)
-		for y = 0; y < c.cylinderData.height; y++ {
-			oldY = c.cylinderData.oldY(y)
-			cylindrified.Set(x, y, img.At(oldX, oldY))
+	for x := 0; x < c.projector.width; x++ {
+		oldX = c.projector.originalX(x)
+		for y = 0; y < c.projector.height; y++ {
+			oldY = c.projector.originalY(y)
+			projected.Set(x, y, img.At(oldX, oldY))
 		}
 	}
 
-	return cylindrified
+	return projected
 }
 
 func parseHexColour(s string) (color.RGBA, error) {
