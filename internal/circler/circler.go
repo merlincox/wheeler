@@ -188,7 +188,7 @@ func (c *Circler) Printf(format string, args ...any) {
 	}
 }
 
-// palette generates a palette and as necessary remaps the rgbMap to its colours
+// palette generates a palette and as necessary remaps the rgbMap to the palette colours
 func (c *Circler) palette() color.Palette {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -209,10 +209,10 @@ func (c *Circler) palette() color.Palette {
 		return c.colourData.palette
 	}
 
+	// for all unique colours in the source, calculate the squared distance to fg and bg
 	sqDists := make(rgbSqDists, len(c.colourData.rgbMap))
 	var bgDist, fgDist uint32
 
-	// for all unique colours in the source, calc squared distance to fg and bg
 	i := 0
 	for rgb := range c.colourData.rgbMap {
 		bgDist = rgb.sqDist(c.bg)
@@ -360,12 +360,7 @@ func (c *Circler) convertToPaletted(src *image.RGBA) *image.Paletted {
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			colourAtXY = src.RGBAAt(x, y)
-			rgb := rgbData{
-				r: colourAtXY.R,
-				g: colourAtXY.G,
-				b: colourAtXY.B,
-			}
-			selectedCol, ok := c.colourData.rgbMap[rgb]
+			selectedCol, ok := c.colourData.rgbMap[fromRGBA(colourAtXY)]
 			if !ok {
 				c.Printf("missing colour in map")
 			}

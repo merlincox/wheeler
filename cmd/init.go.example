@@ -1,0 +1,21 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// example for debugging without altering the defaults
+func init() {
+	textMap := make(map[string]string)
+
+	textMap["vajra-guru"] = "ཨོཾ་ཨཱཿ་ཧཱུྃ་བཛྲ་གུ་རུ་པདྨ་སིདྡྷི་ཧཱུྃ།"
+	textMap["om-ah-hum"] = "ཨོཾ་ཨཱཿ་ཧཱུྃ"
+
+	defaults.Aspect = "16:9"
+	defaults.Verbose = true
+	key := "vajra-guru"
+
+	defaults.Text = textMap[key]
+	defaults.OutputFilepath = fmt.Sprintf("images/%s-%s.gif", key, strings.ReplaceAll(defaults.Aspect, ":", "-"))
+}
